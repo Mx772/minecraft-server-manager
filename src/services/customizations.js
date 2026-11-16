@@ -29,6 +29,23 @@ const ENV_MARKER = 'COPY_CONFIG_SRC=/data/customizations';
 const SECRET_MSG =
   'This customization fills in a secret when the server starts, so it can only be edited in the customizations folder.';
 
+const OWNED_MSG = 'This file is managed by the Discord chat bridge. Change it from the Discord tab.';
+
+/** Owner name (e.g. 'discord-chat-bridge') of a customization path, or null. Owned files are managed by a panel feature. */
+function ownerOf(serverId, rel) {
+  const row = db.get('SELECT owner FROM server_customizations WHERE server_id = ? AND path = ?', serverId, rel);
+  return row && row.owner ? row.owner : null;
+}
+
+/**
+ * Owned by a panel feature: its row says so, or it is a chat-bridge config path (static, so a
+ * lost row can never expose the token-bearing live file to Add/Keep/Restore).
+ */
+const isOwnedPath = (serverId, rel) =>
+  Boolean(ownerOf(serverId, rel)) ||
+  // Lazy require (cycle-breaker): chatBridge requires this module. Only where the bridge exists.
+  require('../integrations/chatBridge').protectedLivePaths(serverId).includes(rel);
+
 const plural = (n) => `${n} file${n === 1 ? '' : 's'}`;
 
 function mustServer(serverId) {
@@ -114,7 +131,7 @@ async function wouldLosePlaceholder(copyAbs, liveAbs) {
   return !live || !copy.equals(live);
 }
 
-/** @returns {Promise<{path: string, size: number, mtime: number, capturedAt: string|null, capturedPack: {id: string, name: string}|null, liveMtime: number|null, state: 'applied'|'pending'|'changed'}[]>} */
+/** @returns {Promise<{path: string, size: number, mtime: number, capturedAt: string|null, capturedPack: {id: string, name: string}|null, liveMtime: number|null, state: 'applied'|'pending'|'changed'|'managed', owner: string|null, missing: boolean}[]>} */
 async function list(serverId) {
   mustServer(serverId);
   const dir = ensureDir(serverId);
@@ -123,18 +140,38 @@ async function list(serverId) {
   );
   const onDisk = await walkFiles(dir);
   const present = new Set(onDisk);
-  for (const p of rows.keys()) {
-    if (!present.has(p)) db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', serverId, p);
-  }
   const root = serverRoot(serverId);
   const out = [];
+  for (const [p, r] of rows) {
+    if (present.has(p)) continue;
+    // An owned row must survive a missing copy (the owner rewrites it), or the owner
+    // marker is lost; report it instead of pruning.
+    if (r.owner) {
+      out.push({
+        path: p,
+        size: 0,
+        mtime: 0,
+        liveMtime: null,
+        capturedAt: r.captured_at,
+        capturedPack: null,
+        state: 'managed',
+        owner: r.owner,
+        missing: true,
+      });
+    } else {
+      db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', serverId, p);
+    }
+  }
   for (const rel of onDisk.sort()) {
     const abs = path.join(dir, rel);
     const st = await fsp.stat(abs).catch(() => null);
     if (!st) continue;
     const row = rows.get(rel);
     const live = await fsp.stat(path.join(root, rel)).catch(() => null);
-    const state = await driftState(abs, st, live ? { abs: path.join(root, rel), st: live } : null);
+    // A file owned by a panel feature is rewritten by that feature (or the mod it
+    // configures) at will, which would otherwise read as drift.
+    const owner = row && row.owner ? row.owner : null;
+    const state = owner ? 'managed' : await driftState(abs, st, live ? { abs: path.join(root, rel), st: live } : null);
     out.push({
       path: rel,
       size: st.size,
@@ -146,9 +183,11 @@ async function list(serverId) {
           ? { id: row.captured_pack_version_id, name: row.captured_pack_version_name }
           : null,
       state,
+      owner,
+      missing: false,
     });
   }
-  return out;
+  return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /** Server-relative paths that have a customization copy (no hashing; for the Files page badge). */
@@ -213,6 +252,7 @@ async function syncAfterWrite(serverId, rel) {
     const dest = safeJoin(dir, rel);
     const lst = await fsp.lstat(dest).catch(() => null);
     if (!lst || !lst.isFile()) return false;
+    if (isOwnedPath(serverId, rel)) return false; // the live copy may hold a real secret
     const liveAbs = path.join(serverRoot(serverId), rel);
     if (await wouldLosePlaceholder(dest, liveAbs)) return false;
     await fsp.copyFile(liveAbs, dest);
@@ -248,7 +288,11 @@ async function eachCustomized(serverId, paths, fn) {
       if (!lst || lst.isSymbolicLink() || !(lst.isFile() || lst.isDirectory())) {
         throw httpError(404, 'That file is not customized.');
       }
-      const rels = lst.isDirectory() ? (await walkFiles(copyAbs)).map((r) => `${rel}/${r}`) : [rel];
+      // A selected file that is owned is refused; owned files inside a folder are skipped.
+      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
+      const rels = lst.isDirectory()
+        ? (await walkFiles(copyAbs)).map((r) => `${rel}/${r}`).filter((r) => !isOwnedPath(serverId, r))
+        : [rel];
       if (!rels.length) throw httpError(404, 'That file is not customized.');
       for (const r of rels) await fn(r, safeJoin(dir, r), safeJoin(root, r));
       fileCount += rels.length;
@@ -351,9 +395,10 @@ async function add(serverId, paths, { actor = 'system' } = {}) {
       if (lst.isSymbolicLink()) throw httpError(400, 'Links cannot be customized.');
       let rels;
       if (lst.isDirectory()) {
-        rels = (await walkFiles(abs)).map((r) => `${rel}/${r}`);
+        rels = (await walkFiles(abs)).map((r) => `${rel}/${r}`).filter((r) => !isOwnedPath(serverId, r));
         if (!rels.length) throw httpError(400, 'That folder has no files in it.');
       } else if (lst.isFile()) {
+        if (isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
         rels = [rel];
       } else {
         throw httpError(400, 'Only files and folders can be customized.');
@@ -467,8 +512,15 @@ async function remove(serverId, paths, { actor = 'system' } = {}) {
       const abs = safeJoin(dir, rel);
       const lst = await fsp.lstat(abs).catch(() => null);
       if (!lst) throw httpError(404, 'That is not customized.');
-      const rels = lst.isDirectory() ? (await walkFiles(abs)).map((r) => `${rel}/${r}`) : [rel];
-      await fsp.rm(abs, { recursive: true, force: true });
+      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
+      const all = lst.isDirectory() ? (await walkFiles(abs)).map((r) => `${rel}/${r}`) : [rel];
+      const rels = all.filter((r) => !isOwnedPath(serverId, r));
+      if (rels.length === all.length) {
+        await fsp.rm(abs, { recursive: true, force: true });
+      } else {
+        // Owned files inside the folder stay; remove only the rest.
+        for (const r of rels) await fsp.rm(safeJoin(dir, r), { force: true });
+      }
       for (const r of rels) db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', serverId, r);
       await pruneEmptyDirs(dir, path.dirname(abs));
       fileCount += rels.length;
@@ -516,7 +568,72 @@ async function pruneEmptyDirs(rootAbs, start) {
   }
 }
 
+/**
+ * For feature owners (e.g. the Discord chat bridge): write `content` as the
+ * customization copy of server-relative `rel` and mark the row as owned, so the
+ * user's own actions and drift detection leave it alone. Path-guarded and
+ * quota-checked. The caller is responsible for rebuilding when the container
+ * lacks the customizations env (see flagRebuildIfNeeded).
+ */
+async function writeOwned(serverId, rel, content, owner) {
+  mustServer(serverId);
+  const clean = files.resolvePath(serverId, rel).rel;
+  assertCustomizable(clean, await worldFolders(serverId));
+  const existing = ownerOf(serverId, clean);
+  if (existing && existing !== owner) throw httpError(400, 'That file is managed by another feature.');
+  const dir = ensureDir(serverId);
+  const dest = safeJoin(dir, clean);
+  const lst = await fsp.lstat(dest).catch(() => null);
+  if (lst && !lst.isFile()) throw httpError(400, 'That path is not a regular file.');
+  const bytes = Buffer.byteLength(content, 'utf8');
+  files.assertRoom(serverId, bytes);
+  await files.assertDiskFree(bytes);
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  const tmp = `${dest}.tmp-${process.pid}`;
+  await fsp.writeFile(tmp, content, { mode: 0o600 });
+  await fsp.rename(tmp, dest);
+  recordRow(serverId, clean, await sha256File(dest), packOf(serverId));
+  db.run('UPDATE server_customizations SET owner = ? WHERE server_id = ? AND path = ?', owner, serverId, clean);
+  indexer.scheduleScan();
+  return { path: clean, needsRebuild: await flagRebuildIfNeeded(serverId) };
+}
+
+/** Delete an owned copy and its row (never the live file). A no-op when absent. */
+async function removeOwned(serverId, rel, owner) {
+  mustServer(serverId);
+  const clean = files.resolvePath(serverId, rel).rel;
+  const existing = ownerOf(serverId, clean);
+  if (existing && existing !== owner) throw httpError(400, 'That file is managed by another feature.');
+  const dir = ensureDir(serverId);
+  const abs = safeJoin(dir, clean);
+  await fsp.rm(abs, { force: true });
+  db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', serverId, clean);
+  await pruneEmptyDirs(dir, path.dirname(abs));
+  indexer.scheduleScan();
+}
+
+/** Read an owned copy's text, or null when absent. */
+async function readOwned(serverId, rel, owner) {
+  const clean = files.resolvePath(serverId, rel).rel;
+  if (ownerOf(serverId, clean) !== owner) return null;
+  return fsp.readFile(safeJoin(customDir(serverId), clean), 'utf8').catch(() => null);
+}
+
+/** Server-relative paths of every file owned by a panel feature (for exports that must skip them). */
+function ownedPaths(serverId) {
+  return new Set(
+    db
+      .all('SELECT path FROM server_customizations WHERE server_id = ? AND owner IS NOT NULL', serverId)
+      .map((r) => r.path)
+  );
+}
+
 module.exports = {
+  writeOwned,
+  removeOwned,
+  readOwned,
+  ownedPaths,
+  OWNED_MSG,
   list,
   add,
   remove,

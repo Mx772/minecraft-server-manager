@@ -11,7 +11,9 @@ const { z } = require('zod');
 const discord = require('../../integrations/discord');
 const invites = require('../../integrations/invites');
 const statusPage = require('../../integrations/statusPage');
+const chatBridge = require('../../integrations/chatBridge');
 const serversService = require('../../services/servers');
+const tasks = require('../../services/tasks');
 const { rejectCrossSiteGet } = require('../middleware/auth');
 const { recordEvent } = require('../../events');
 
@@ -142,6 +144,67 @@ router.post(
       summary: `Public status page ${config.enabled ? `enabled at /status/${config.slug}` : 'disabled'}.`,
     });
     res.json({ ok: true, statusPage: config });
+  })
+);
+
+// ---- Discord chat bridge (mod install + config + bot token) ----
+
+const actorOf = (req) => (req.user ? req.user.username : 'admin');
+
+router.get(
+  '/chat-bridge',
+  asyncHandler(async (req, res) => {
+    const server = mustGet(req);
+    res.json({ ok: true, chatBridge: await chatBridge.getStatus(server.id) });
+  })
+);
+
+router.post(
+  '/chat-bridge/check',
+  asyncHandler(async (req, res) => {
+    const server = mustGet(req);
+    res.json({ ok: true, compatibility: await chatBridge.checkCompatibility(server.id) });
+  })
+);
+
+const validateSchema = z.object({
+  token: z.string().trim().regex(chatBridge.TOKEN_RE, chatBridge.TOKEN_FORMAT_MSG).or(z.literal('')).optional(),
+  guildId: z.string().trim().max(30).optional(),
+  channelId: z.string().trim().max(30).optional(),
+});
+
+router.post(
+  '/chat-bridge/validate',
+  asyncHandler(async (req, res) => {
+    const server = mustGet(req);
+    const input = validateSchema.parse(req.body || {});
+    res.json({ ok: true, validation: await chatBridge.validateDiscord({ serverId: server.id, ...input }) });
+  })
+);
+
+// Long operation (mod download): returns {ok, taskId}; poll /api/tasks/:id. The task
+// result is {needsRebuild, status}.
+router.post(
+  '/chat-bridge',
+  asyncHandler((req, res) => {
+    const server = mustGet(req);
+    chatBridge.parseInput(req.body); // reject bad input before starting the task
+    const actor = actorOf(req);
+    const taskId = tasks.run(
+      `Setting up the Discord bridge on ${server.display_name}…`,
+      { serverId: server.id, actor },
+      (t) => chatBridge.configure(server.id, req.body, { actor, onStep: (label) => t.step(label) })
+    );
+    res.status(202).json({ ok: true, taskId });
+  })
+);
+
+router.delete(
+  '/chat-bridge',
+  asyncHandler(async (req, res) => {
+    const server = mustGet(req);
+    const out = await chatBridge.remove(server.id, { actor: actorOf(req) });
+    res.json({ ok: true, ...out });
   })
 );
 

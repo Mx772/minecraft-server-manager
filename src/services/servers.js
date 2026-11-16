@@ -119,6 +119,13 @@ function assembleEnv(server) {
     const cfKey = require('./apiKeys').getKey('curseforge');
     if (cfKey) env.CF_API_KEY = cfKey;
   }
+  // The Discord chat bridge's bot token: the bridge's config file holds only a
+  // ${CFG_DISCORD_BOT_TOKEN} placeholder that the image fills in at start. Panel-owned,
+  // so a user env value can't replace it. Lazy require: chatBridge requires this module.
+  const chatBridge = require('../integrations/chatBridge');
+  const bridgeToken = chatBridge.activeToken(server.id);
+  if (bridgeToken) env[chatBridge.TOKEN_ENV] = bridgeToken;
+  else delete env[chatBridge.TOKEN_ENV];
   // Trust boundary: the wizard's "extra env" field is a DENYLIST, not an
   // allowlist. An operator can already set JVM_OPTS / EXTRA_ARGS / startup RCON
   // etc., which is arbitrary code execution *inside the container sandbox* - an
@@ -249,6 +256,7 @@ function previewServerSpec(id) {
   const env = assembleEnv(server);
   env.RCON_PASSWORD = '(hidden)';
   if (env.CF_API_KEY) env.CF_API_KEY = '(hidden)';
+  if (env.CFG_DISCORD_BOT_TOKEN) env.CFG_DISCORD_BOT_TOKEN = '(hidden)';
   return {
     containerName: server.containerName || containers.containerName(server.id),
     network: server.networkName || null,

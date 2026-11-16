@@ -1,4 +1,4 @@
-<div class="space-y-4" id="ig-root" data-server-id="{{server.id}}" data-invite="{{jsonAttr integrations.invite}}">
+<div class="space-y-4" id="ig-root" data-server-id="{{server.id}}" data-server-name="{{server.name}}" data-invite="{{jsonAttr integrations.invite}}">
 
   {{#if (eq sub 'chatbot')}}
   {{#if integrations.wizard}}
@@ -154,6 +154,14 @@
   {{/if}}
 
   {{#if (eq sub 'discord')}}
+  {{! Chat bridge card: rendered entirely by public/js/pages/chat-bridge.js from /api/servers/:id/integrations/chat-bridge. }}
+  <div class="card p-4 lg:col-span-2" id="cb-card">
+    <h3 class="flex items-center gap-2 font-semibold">{{{icon 'link' 'size-4 text-link'}}} Discord Chat Bridge</h3>
+    <p class="mt-1 text-xs text-ink-faint">Two-way chat between Minecraft and a Discord channel, using the Discord &amp; Chat Images mod. The panel installs the mod and keeps it across pack updates.</p>
+    <div class="mt-4" id="cb-body"><p class="text-sm text-ink-faint">Loading…</p></div>
+  </div>
+  <script type="module" src="/js/pages/chat-bridge.js"></script>
+
   <div class="card p-4 lg:col-span-2">
     <div class="mb-4 flex items-center justify-between gap-3">
       <h3 class="flex items-center gap-2 font-semibold">{{{icon 'webhook' 'size-4 text-link'}}} Discord Notifications</h3>

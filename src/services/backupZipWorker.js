@@ -12,7 +12,8 @@ const fs = require('node:fs');
 const { parentPort, workerData } = require('node:worker_threads');
 const { ZipArchive } = require('archiver');
 
-const { sourceDir, outFile } = workerData;
+const { sourceDir, outFile, exclude = [] } = workerData;
+const excluded = new Set(exclude);
 
 let settled = false;
 const finish = (msg) => {
@@ -46,5 +47,5 @@ archive.on('progress', (d) => {
 });
 
 archive.pipe(output);
-archive.directory(sourceDir, false);
+archive.directory(sourceDir, false, (entry) => (excluded.has(entry.name) ? false : entry));
 archive.finalize();
