@@ -168,7 +168,7 @@ router.post(
 );
 
 const validateSchema = z.object({
-  token: z.string().trim().max(200).optional(),
+  token: z.string().trim().regex(chatBridge.TOKEN_RE, chatBridge.TOKEN_FORMAT_MSG).or(z.literal('')).optional(),
   guildId: z.string().trim().max(30).optional(),
   channelId: z.string().trim().max(30).optional(),
 });

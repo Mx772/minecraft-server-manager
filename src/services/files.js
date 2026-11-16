@@ -50,13 +50,40 @@ function resolvePath(serverId, relPath = '') {
   return { base, abs, rel };
 }
 
+const TOKEN_FILE_MSG =
+  "This file holds the Discord bot token, so it can't be opened or changed here. Change the bridge from the Discord tab.";
+
+// Lazy require (cycle-breaker): chatBridge -> mods/customizations -> files.
+const liveConfigPaths = (serverId) => require('../integrations/chatBridge').protectedLivePaths(serverId);
+
+/** Absolute paths of the live chat-bridge configs (they hold the real bot token) for a server scope. */
+function tokenFileAbs(serverId) {
+  if (!serverId) return new Set();
+  const base = safeJoin(config.dataDir, 'servers', serverId);
+  return new Set(liveConfigPaths(serverId).map((rel) => path.join(base, rel)));
+}
+
+/** True when `rel` is a folder that currently contains a live bridge config. */
+function holdsTokenFile(serverId, rel) {
+  if (!serverId || !rel) return false;
+  return liveConfigPaths(serverId).some(
+    (p) => p.startsWith(`${rel}/`) && fs.existsSync(safeJoin(config.dataDir, 'servers', serverId, p))
+  );
+}
+
 function guardProtected(serverId, rel) {
+  if (serverId && liveConfigPaths(serverId).includes(rel)) throw httpError(403, TOKEN_FILE_MSG);
   if (!serverId && isProtectedGlobal(rel)) {
     // Applies to read/download AND write - the DB holds password hashes and the
     // at-rest secret cipher, and .session-secret is that cipher's key, so neither
     // must ever leave (or change) via the file manager.
     throw httpError(403, 'That panel file is not accessible from the file manager.');
   }
+}
+
+/** Moving a folder that holds the live bridge config would put the token file at a path nothing guards. */
+function guardMovingTokenFolder(serverId, rel) {
+  if (holdsTokenFile(serverId, rel)) throw httpError(403, TOKEN_FILE_MSG);
 }
 
 /** List a directory: entries {name, dir, size, mtime, mtimeMs, path}, dirs first. */
@@ -236,6 +263,7 @@ async function mkdir(serverId, relPath, { actor = 'system' } = {}) {
 async function rename(serverId, relPath, newName, { actor = 'system' } = {}) {
   const { abs, rel } = resolvePath(serverId, relPath);
   guardProtected(serverId, rel);
+  guardMovingTokenFolder(serverId, rel);
   if (!rel) throw httpError(400, 'Cannot rename the root.');
   const clean = sanitizeName(newName);
   if (!fs.existsSync(abs)) throw httpError(404, 'Not found');
@@ -262,6 +290,7 @@ async function rename(serverId, relPath, newName, { actor = 'system' } = {}) {
 async function move(serverId, relPath, destRel, { actor = 'system', quiet = false } = {}) {
   const { abs, rel } = resolvePath(serverId, relPath);
   guardProtected(serverId, rel);
+  guardMovingTokenFolder(serverId, rel);
   if (!rel) throw httpError(400, 'Cannot move the root.');
   const dest = resolvePath(serverId, destRel);
   const dst = await fsp.stat(dest.abs).catch(() => null);
@@ -308,7 +337,8 @@ async function copy(serverId, relPath, destRel, { actor = 'system', quiet = fals
   const target = path.join(dest.abs, path.basename(abs));
   guardProtected(serverId, dest.rel ? `${dest.rel}/${path.basename(abs)}` : path.basename(abs));
   if (fs.existsSync(target)) throw httpError(409, `"${path.basename(abs)}" already exists in the destination.`);
-  await fsp.cp(abs, target, { recursive: true });
+  const secret = tokenFileAbs(serverId);
+  await fsp.cp(abs, target, { recursive: true, filter: (src) => !secret.has(src) });
   const toRel = dest.rel ? `${dest.rel}/${path.basename(abs)}` : path.basename(abs);
   if (!quiet) {
     recordEvent({
@@ -486,6 +516,7 @@ async function zipEntries(serverId, paths, { maxBytes = MAX_ZIP_BYTES } = {}) {
   const filesOut = [];
   const emptyDirs = [];
   const taken = new Set();
+  const secret = tokenFileAbs(serverId); // never zipped from inside a selected folder
   let totalBytes = 0;
 
   const walk = async (abs, name) => {
@@ -499,6 +530,7 @@ async function zipEntries(serverId, paths, { maxBytes = MAX_ZIP_BYTES } = {}) {
         any = true;
         await walk(childAbs, childName);
       } else if (e.isFile()) {
+        if (secret.has(childAbs)) continue;
         any = true;
         const st = await fsp.stat(childAbs).catch(() => null);
         if (!st) continue;
@@ -647,6 +679,7 @@ async function searchFiles(serverId, query, { caseSensitive = false, subdir = ''
   const rootStat = await fsp.stat(rootAbs).catch(() => null);
   if (!rootStat || !rootStat.isDirectory()) throw httpError(404, 'Folder not found.');
 
+  const secret = tokenFileAbs(serverId);
   const hay = caseSensitive ? null : needle.toLowerCase();
   const matches = [];
   let filesScanned = 0;
@@ -671,6 +704,7 @@ async function searchFiles(serverId, query, { caseSensitive = false, subdir = ''
         continue;
       }
       if (!e.isFile()) continue;
+      if (secret.has(childAbs)) continue;
       if (++filesScanned > SEARCH_MAX_FILES_SCANNED) {
         truncated = true;
         return;

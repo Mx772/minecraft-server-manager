@@ -832,7 +832,7 @@ function sanitizeEnv(env) {
 // config, whose live copy holds the real bot token) are never exported.
 function collectConfigFiles(serverDir, serverId) {
   const rels = [];
-  const owned = new Set(require('../config/chat-bridges').BRIDGES.map((b) => b.configPath));
+  const owned = new Set(serverId ? require('../integrations/chatBridge').protectedLivePaths(serverId) : []);
   if (serverId) for (const p of require('../services/customizations').ownedPaths(serverId)) owned.add(p);
   if (fs.existsSync(path.join(serverDir, 'server.properties'))) rels.push('server.properties');
   const walk = (abs, rel) => {

@@ -155,7 +155,7 @@ function init() {
         <button type="button" class="btn btn-danger" data-cb-remove>Remove Bridge</button>
       </div>
       <div class="mt-3" data-cb-results></div>
-      <p class="help mt-3">The bridge's config file is managed by the panel. You can add extra settings to it in the Files tab and they are kept. Once the server has started, the live config file and backups contain the bot token, so share backups carefully.</p>`;
+      <p class="help mt-3">The bridge's config file is managed by the panel. You can add extra settings to it in the Files tab and they are kept. Your copy holds a placeholder instead of the token, and backups leave out the server's live copy.</p>`;
     if (validated) body.querySelector('[data-cb-results]').innerHTML = renderResults(validated);
   }
 
@@ -273,7 +273,7 @@ function init() {
         )}
       </ol></fieldset></li>
       </ol>
-      <p class="help mt-4">Once the server has started, the live config file and backups contain the bot token, so share backups carefully.</p>`;
+      <p class="help mt-4">The token is filled in only when the server starts, so it stays out of your config copy, the Files tab, and backups.</p>`;
     body.innerHTML = setup;
     wireForm();
   }

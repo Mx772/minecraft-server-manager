@@ -98,7 +98,17 @@ function getBridge(id = DEFAULT_BRIDGE_ID) {
   return BRIDGES.find((b) => b.id === id) || null;
 }
 
+/**
+ * Server-relative paths of every bridge's LIVE config. After a start the image fills
+ * the token placeholder in, so these files hold the real bot token and must never be
+ * readable through the file manager, downloads, search or backups.
+ */
+function liveConfigPaths() {
+  return BRIDGES.map((b) => b.configPath);
+}
+
 module.exports = {
+  liveConfigPaths,
   BRIDGES,
   DEFAULT_BRIDGE_ID,
   getBridge,

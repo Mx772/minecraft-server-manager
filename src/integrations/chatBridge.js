@@ -32,6 +32,7 @@ const OWNER = 'discord-chat-bridge';
 const DISCORD_API = 'https://discord.com/api/v10';
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 const TOKEN_RE = /^[\w.-]{20,200}$/;
+const TOKEN_FORMAT_MSG = "That doesn't look like a bot token. Copy it again from the Developer Portal under Bot.";
 
 /** @typedef {{id: string, ok: boolean, message: string}} Check */
 
@@ -60,6 +61,17 @@ function storedToken(serverId) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Live config paths (they hold the real token once the image fills the placeholder in)
+ * that the panel must protect for this server: only where the panel's bridge exists.
+ * A server with the mod set up by hand keeps full access to its own config.
+ * @returns {string[]}
+ */
+function protectedLivePaths(serverId) {
+  if (!serverId || !row(serverId)) return [];
+  return catalog.liveConfigPaths();
 }
 
 /** The token to inject into the container env: only for an enabled bridge. */
@@ -162,6 +174,7 @@ async function checkCompatibility(serverId) {
 async function discordGet(token, pathname) {
   try {
     const res = await fetch(`${DISCORD_API}${pathname}`, {
+      redirect: 'error',
       headers: { Authorization: `Bot ${token}`, 'User-Agent': 'DiscordBot (minecraft-server-manager, 1)' },
       signal: AbortSignal.timeout(8000),
     });
@@ -173,7 +186,11 @@ async function discordGet(token, pathname) {
     }
     return { status: res.status, json };
   } catch (err) {
-    logger.debug('A Discord API request failed.', { err: serializeError(err, { includeStack: false }) });
+    // Only the error's name and code: undici can put an invalid header value (the token) in err.message.
+    logger.debug('A Discord API request failed.', {
+      errName: err && err.name,
+      errCode: err && (err.code || (err.cause && err.cause.code)),
+    });
     return { status: 0, json: null };
   }
 }
@@ -195,6 +212,7 @@ function hasIntent(flags, key) {
 async function validateDiscord({ serverId, token, guildId, channelId } = {}) {
   const useToken = token || (serverId ? storedToken(serverId) : null);
   if (!useToken) throw httpError(400, 'Paste the bot token first.');
+  if (!TOKEN_RE.test(useToken)) throw httpError(400, TOKEN_FORMAT_MSG);
   const bridge = catalog.getBridge();
   /** @type {Check[]} */
   const checks = [];
@@ -322,11 +340,7 @@ const channelOverride = z.union([snowflake, z.literal(''), z.literal('-1')]);
 const channelShape = Object.fromEntries(catalog.CHANNEL_CATEGORIES.map((k) => [k, channelOverride.optional()]));
 
 const configureSchema = z.object({
-  token: z
-    .string()
-    .trim()
-    .regex(TOKEN_RE, "That doesn't look like a bot token. Copy it again from the Developer Portal under Bot.")
-    .optional(),
+  token: z.string().trim().regex(TOKEN_RE, TOKEN_FORMAT_MSG).optional(),
   guildId: snowflake,
   defaultChannelId: snowflake,
   serverLogsChannelId: z.union([snowflake, z.literal('')]).optional(),
@@ -598,6 +612,8 @@ module.exports = {
   KIND,
   OWNER,
   parseInput,
+  TOKEN_RE,
+  TOKEN_FORMAT_MSG,
   getStatus,
   checkCompatibility,
   validateDiscord,
@@ -606,5 +622,6 @@ module.exports = {
   remove,
   storedToken,
   activeToken,
+  protectedLivePaths,
   TOKEN_ENV: catalog.TOKEN_ENV,
 };

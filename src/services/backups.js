@@ -59,7 +59,12 @@ async function createBackupImpl(
 
   const archive = async () => {
     if (task) task.step('Compressing server files…');
+    // Only where the panel's chat bridge is set up: the live config holds the real bot token (the image fills it in at
+    // start), and backups are downloadable. Leave it out: the owned copy under
+    // customizations/ (placeholder only) is backed up, and the image regenerates the
+    // live file from it at the next start, so a restore needs nothing from the archive.
     await zipDirectory(dataPath('servers', serverId), absPath, {
+      exclude: require('../integrations/chatBridge').protectedLivePaths(serverId),
       onProgress: task ? (processedBytes) => task.progress(processedBytes, needed) : null,
     });
   };
@@ -666,11 +671,11 @@ async function applyRetention(serverIds, { actor = 'system', onlyIds = null } = 
 // Compression runs in a worker thread (src/services/backupZipWorker.js) so the
 // deflate CPU + archiver framing for a multi-GB world don't stall every other
 // request. The worker deletes its own half-written .zip on failure.
-function zipDirectory(sourceDir, outFile, { onProgress = null } = {}) {
+function zipDirectory(sourceDir, outFile, { onProgress = null, exclude = [] } = {}) {
   /** @type {Promise<void>} */
   const p = new Promise((resolve, reject) => {
     const worker = new Worker(path.join(__dirname, 'backupZipWorker.js'), {
-      workerData: { sourceDir, outFile },
+      workerData: { sourceDir, outFile, exclude },
     });
     let settled = false;
     const done = (fn, arg) => {

@@ -444,8 +444,163 @@ test('routes: status, input validation and the task-based configure', async (t) 
   const check = await app.req('POST', `${base}/check`, { cookie });
   assert.equal(check.json.compatibility.supported, true);
 
+  // A malformed token is a friendly 400 from the route, before Discord is contacted.
+  const badTok = await app.req('POST', `${base}/validate`, {
+    cookie,
+    body: { token: 'abcdefghijklmnopqrstuvwxyz\r\nX-Evil: 1' },
+  });
+  assert.equal(badTok.status, 400);
+
   mockDiscord(t, goodDiscord);
   const val = await app.req('POST', `${base}/validate`, { cookie, body: { token: TOKEN, guildId: GUILD } });
   assert.equal(val.json.validation.ok, true);
   assert.ok(!val.text.includes(TOKEN));
+});
+
+// ---- Live-config protection in the file manager ----
+
+const filesSvc = require('../src/services/files');
+
+function liveFixture(id) {
+  const live = path.join(root(id), CFG_PATH);
+  fs.mkdirSync(path.dirname(live), { recursive: true });
+  fs.writeFileSync(live, `discordBotToken = "${TOKEN}"\n`);
+  fs.writeFileSync(path.join(root(id), 'config', 'other.toml'), `note = "x"\n`);
+  return live;
+}
+
+test('the file manager never exposes the live bridge config', async (t) => {
+  mockModrinth(t);
+  const id = seed('srv_cb_files');
+  mockInstall(t, id);
+  await bridge.configure(id, form());
+  liveFixture(id);
+  const reject = { status: 403, message: /holds the Discord bot token/ };
+
+  await assert.rejects(filesSvc.readText(id, CFG_PATH), reject);
+  await assert.rejects(filesSvc.statFile(id, CFG_PATH), reject);
+  await assert.rejects(filesSvc.writeText(id, CFG_PATH, 'x'), reject);
+  await assert.rejects(filesSvc.remove(id, CFG_PATH), reject);
+  await assert.rejects(filesSvc.rename(id, CFG_PATH, 'x.toml'), reject);
+  await assert.rejects(filesSvc.move(id, 'config', ''), reject); // moving the folder would expose it
+  await assert.rejects(filesSvc.zipEntries(id, [CFG_PATH]), reject);
+
+  // Inside a selected folder it is skipped, the rest still zips.
+  const zip = await filesSvc.zipEntries(id, ['config']);
+  assert.ok(zip.files.some((f) => f.name === 'config/other.toml'));
+  assert.ok(!zip.files.some((f) => f.name.endsWith('discord_chat_mod-common.toml')));
+
+  // Search skips it (token text is only in the live file).
+  const found = await filesSvc.searchFiles(id, 'superSecretBotToken');
+  assert.deepEqual(found.matches, []);
+
+  // Copying the folder leaves the live file behind.
+  fs.mkdirSync(path.join(root(id), 'dest'));
+  await filesSvc.copy(id, 'config', 'dest');
+  assert.equal(fs.existsSync(path.join(root(id), 'dest', 'config', 'other.toml')), true);
+  assert.equal(fs.existsSync(path.join(root(id), 'dest', 'config', 'discord_chat_mod-common.toml')), false);
+
+  // The owned copy (placeholder only) stays readable.
+  const copy = await filesSvc.readText(id, `customizations/${CFG_PATH}`);
+  assert.ok(copy.content.includes('${CFG_DISCORD_BOT_TOKEN}'));
+  assert.ok(!copy.content.includes(TOKEN));
+});
+
+test('a lost row cannot expose the live config through Add, and folders skip owned files', async (t) => {
+  mockModrinth(t);
+  const id = seed('srv_cb_prune');
+  mockInstall(t, id);
+  await bridge.configure(id, form());
+  liveFixture(id);
+
+  // Folder add: the owned file is skipped, the rest succeeds.
+  let res = await customizations.add(id, ['config']);
+  assert.equal(res.succeeded, 1);
+  assert.equal(res.results[0].count, 1);
+  assert.equal(fs.existsSync(path.join(root(id), 'customizations', 'config', 'other.toml')), true);
+  assert.ok(!fs.readFileSync(path.join(root(id), 'customizations', CFG_PATH), 'utf8').includes(TOKEN));
+
+  // Folder keep/restore skip the owned file too.
+  res = await customizations.keepCurrent(id, ['config']);
+  assert.equal(res.succeeded, 1);
+  assert.ok(!fs.readFileSync(path.join(root(id), 'customizations', CFG_PATH), 'utf8').includes(TOKEN));
+
+  // Lose the copy: list keeps the owned row (missing), it is not pruned.
+  fs.rmSync(path.join(root(id), 'customizations', CFG_PATH));
+  const entry = (await customizations.list(id)).find((f) => f.path === CFG_PATH);
+  assert.equal(entry.state, 'managed');
+  assert.equal(entry.missing, true);
+  assert.equal(entry.owner, 'discord-chat-bridge');
+
+  // Even with the row gone entirely, Add refuses the path.
+  db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', id, CFG_PATH);
+  res = await customizations.add(id, [CFG_PATH]);
+  assert.equal(res.succeeded, 0);
+  assert.equal(res.results[0].error, customizations.OWNED_MSG);
+  assert.equal(fs.existsSync(path.join(root(id), 'customizations', CFG_PATH)), false);
+
+  // Folder remove leaves owned files and removes the rest.
+  await bridge.configure(id, form());
+  res = await customizations.remove(id, ['config']);
+  assert.equal(res.succeeded, 1);
+  assert.equal(fs.existsSync(path.join(root(id), 'customizations', 'config', 'other.toml')), false);
+  assert.equal(fs.existsSync(path.join(root(id), 'customizations', CFG_PATH)), true);
+});
+
+test('syncAfterWrite skips an owned file even when its copy has no placeholder', async (t) => {
+  mockModrinth(t);
+  const id = seed('srv_cb_sync');
+  mockInstall(t, id);
+  await bridge.configure(id, form());
+  const copy = path.join(root(id), 'customizations', CFG_PATH);
+  fs.writeFileSync(copy, 'plain = 1\n'); // no ${CFG_ text: only the owner guard can stop the copy
+  const live = liveFixture(id);
+  assert.equal(await customizations.syncAfterWrite(id, CFG_PATH), false);
+  assert.equal(fs.readFileSync(copy, 'utf8'), 'plain = 1\n');
+  assert.ok(fs.readFileSync(live, 'utf8').includes(TOKEN));
+});
+
+test('a malformed token is rejected before any request to Discord', async (t) => {
+  const discordCalls = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    discordCalls.push(url);
+    throw new Error('should not be called');
+  });
+  const bad = 'abcdefghijklmnopqrstuvwxyz\r\nX-Evil: 1';
+  await assert.rejects(bridge.validateDiscord({ token: bad }), {
+    status: 400,
+    message: /doesn't look like a bot token/,
+  });
+  assert.equal(discordCalls.length, 0);
+});
+
+test('the Discord request sets redirect error and logs no error message', async (t) => {
+  let opts;
+  t.mock.method(globalThis, 'fetch', async (url, o) => {
+    opts = o;
+    throw Object.assign(new Error(`Invalid header value ${TOKEN}`), { code: 'ERR_X' });
+  });
+  const out = await bridge.validateDiscord({ token: TOKEN });
+  assert.equal(opts.redirect, 'error');
+  assert.equal(out.ok, false);
+  assert.ok(!JSON.stringify(out).includes(TOKEN));
+});
+
+test('a server without the panel bridge keeps full access to its own config', async () => {
+  const id = seed('srv_cb_manual');
+  const live = path.join(root(id), CFG_PATH);
+  fs.mkdirSync(path.dirname(live), { recursive: true });
+  fs.writeFileSync(live, 'hand = "configured"\n');
+
+  assert.equal((await filesSvc.readText(id, CFG_PATH)).content, 'hand = "configured"\n');
+  await filesSvc.writeText(id, CFG_PATH, 'hand = "edited"\n');
+  assert.equal((await filesSvc.statFile(id, CFG_PATH)).size > 0, true);
+  const zip = await filesSvc.zipEntries(id, ['config']);
+  assert.ok(zip.files.some((f) => f.name.endsWith('discord_chat_mod-common.toml')));
+  assert.equal((await filesSvc.searchFiles(id, 'edited')).matches.length, 1);
+  assert.deepEqual(bridge.protectedLivePaths(id), []);
+
+  const res = await customizations.add(id, [CFG_PATH]);
+  assert.equal(res.succeeded, 1);
+  assert.equal((await customizations.list(id)).find((f) => f.path === CFG_PATH).state !== 'managed', true);
 });

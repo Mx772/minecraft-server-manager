@@ -76,6 +76,8 @@ The **Discord Chat Bridge** card on the **Settings → Discord** tab links in-ga
 
 The panel writes the bridge's config file (`config/discord_chat_mod-common.toml`) from this card. You can add extra settings to it from **Open Config** (the `customizations/config` folder in Files), and they are kept. The settings the card controls are rewritten when you save. **Remove Bridge** removes the mod, its settings, and the saved token.
 
-### The token and backups
+### Where the token lives
 
-The saved token is encrypted in the panel. Once the server has started, the live config file and backups contain the token, so share backups carefully.
+The saved token is encrypted in the panel and is given to the server only when it starts. The copy of the config file you edit holds a placeholder, not the token. When the server starts, the image fills the token into the server's live config file. That's why Files won't open that one file, and why backups leave it out (the panel rebuilds it from your copy at the next start).
+
+Anyone who can see the server console could see the token if the mod ever prints it there. Only give console access to people you trust with the bot. If the token might have leaked, reset it in the Discord Developer Portal and paste the new one into **Edit Settings**.

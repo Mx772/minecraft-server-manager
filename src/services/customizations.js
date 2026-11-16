@@ -37,6 +37,15 @@ function ownerOf(serverId, rel) {
   return row && row.owner ? row.owner : null;
 }
 
+/**
+ * Owned by a panel feature: its row says so, or it is a chat-bridge config path (static, so a
+ * lost row can never expose the token-bearing live file to Add/Keep/Restore).
+ */
+const isOwnedPath = (serverId, rel) =>
+  Boolean(ownerOf(serverId, rel)) ||
+  // Lazy require (cycle-breaker): chatBridge requires this module. Only where the bridge exists.
+  require('../integrations/chatBridge').protectedLivePaths(serverId).includes(rel);
+
 const plural = (n) => `${n} file${n === 1 ? '' : 's'}`;
 
 function mustServer(serverId) {
@@ -122,7 +131,7 @@ async function wouldLosePlaceholder(copyAbs, liveAbs) {
   return !live || !copy.equals(live);
 }
 
-/** @returns {Promise<{path: string, size: number, mtime: number, capturedAt: string|null, capturedPack: {id: string, name: string}|null, liveMtime: number|null, state: 'applied'|'pending'|'changed'|'managed', owner: string|null}[]>} */
+/** @returns {Promise<{path: string, size: number, mtime: number, capturedAt: string|null, capturedPack: {id: string, name: string}|null, liveMtime: number|null, state: 'applied'|'pending'|'changed'|'managed', owner: string|null, missing: boolean}[]>} */
 async function list(serverId) {
   mustServer(serverId);
   const dir = ensureDir(serverId);
@@ -131,11 +140,28 @@ async function list(serverId) {
   );
   const onDisk = await walkFiles(dir);
   const present = new Set(onDisk);
-  for (const p of rows.keys()) {
-    if (!present.has(p)) db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', serverId, p);
-  }
   const root = serverRoot(serverId);
   const out = [];
+  for (const [p, r] of rows) {
+    if (present.has(p)) continue;
+    // An owned row must survive a missing copy (the owner rewrites it), or the owner
+    // marker is lost; report it instead of pruning.
+    if (r.owner) {
+      out.push({
+        path: p,
+        size: 0,
+        mtime: 0,
+        liveMtime: null,
+        capturedAt: r.captured_at,
+        capturedPack: null,
+        state: 'managed',
+        owner: r.owner,
+        missing: true,
+      });
+    } else {
+      db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', serverId, p);
+    }
+  }
   for (const rel of onDisk.sort()) {
     const abs = path.join(dir, rel);
     const st = await fsp.stat(abs).catch(() => null);
@@ -158,9 +184,10 @@ async function list(serverId) {
           : null,
       state,
       owner,
+      missing: false,
     });
   }
-  return out;
+  return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 /** Server-relative paths that have a customization copy (no hashing; for the Files page badge). */
@@ -225,7 +252,7 @@ async function syncAfterWrite(serverId, rel) {
     const dest = safeJoin(dir, rel);
     const lst = await fsp.lstat(dest).catch(() => null);
     if (!lst || !lst.isFile()) return false;
-    if (ownerOf(serverId, rel)) return false; // the live copy may hold a real secret
+    if (isOwnedPath(serverId, rel)) return false; // the live copy may hold a real secret
     const liveAbs = path.join(serverRoot(serverId), rel);
     if (await wouldLosePlaceholder(dest, liveAbs)) return false;
     await fsp.copyFile(liveAbs, dest);
@@ -261,9 +288,12 @@ async function eachCustomized(serverId, paths, fn) {
       if (!lst || lst.isSymbolicLink() || !(lst.isFile() || lst.isDirectory())) {
         throw httpError(404, 'That file is not customized.');
       }
-      const rels = lst.isDirectory() ? (await walkFiles(copyAbs)).map((r) => `${rel}/${r}`) : [rel];
+      // A selected file that is owned is refused; owned files inside a folder are skipped.
+      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
+      const rels = lst.isDirectory()
+        ? (await walkFiles(copyAbs)).map((r) => `${rel}/${r}`).filter((r) => !isOwnedPath(serverId, r))
+        : [rel];
       if (!rels.length) throw httpError(404, 'That file is not customized.');
-      if (rels.some((r) => ownerOf(serverId, r))) throw httpError(400, OWNED_MSG);
       for (const r of rels) await fn(r, safeJoin(dir, r), safeJoin(root, r));
       fileCount += rels.length;
       results.push({ path: rel, ok: true, count: rels.length });
@@ -365,14 +395,14 @@ async function add(serverId, paths, { actor = 'system' } = {}) {
       if (lst.isSymbolicLink()) throw httpError(400, 'Links cannot be customized.');
       let rels;
       if (lst.isDirectory()) {
-        rels = (await walkFiles(abs)).map((r) => `${rel}/${r}`);
+        rels = (await walkFiles(abs)).map((r) => `${rel}/${r}`).filter((r) => !isOwnedPath(serverId, r));
         if (!rels.length) throw httpError(400, 'That folder has no files in it.');
       } else if (lst.isFile()) {
+        if (isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
         rels = [rel];
       } else {
         throw httpError(400, 'Only files and folders can be customized.');
       }
-      if (rels.some((r) => ownerOf(serverId, r))) throw httpError(400, OWNED_MSG);
       for (const r of rels) totalBytes += (await fsp.stat(path.join(root, r)).catch(() => ({ size: 0 }))).size;
       totalFiles += rels.length;
       if (totalFiles > MAX_FILES) throw httpError(400, `That is more than ${MAX_FILES} files. Select fewer items.`);
@@ -482,9 +512,15 @@ async function remove(serverId, paths, { actor = 'system' } = {}) {
       const abs = safeJoin(dir, rel);
       const lst = await fsp.lstat(abs).catch(() => null);
       if (!lst) throw httpError(404, 'That is not customized.');
-      const rels = lst.isDirectory() ? (await walkFiles(abs)).map((r) => `${rel}/${r}`) : [rel];
-      if (rels.some((r) => ownerOf(serverId, r))) throw httpError(400, OWNED_MSG);
-      await fsp.rm(abs, { recursive: true, force: true });
+      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
+      const all = lst.isDirectory() ? (await walkFiles(abs)).map((r) => `${rel}/${r}`) : [rel];
+      const rels = all.filter((r) => !isOwnedPath(serverId, r));
+      if (rels.length === all.length) {
+        await fsp.rm(abs, { recursive: true, force: true });
+      } else {
+        // Owned files inside the folder stay; remove only the rest.
+        for (const r of rels) await fsp.rm(safeJoin(dir, r), { force: true });
+      }
       for (const r of rels) db.run('DELETE FROM server_customizations WHERE server_id = ? AND path = ?', serverId, r);
       await pruneEmptyDirs(dir, path.dirname(abs));
       fileCount += rels.length;
