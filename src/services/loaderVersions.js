@@ -44,7 +44,7 @@ async function cachedJson(cacheKey, url, { headers } = {}) {
       headers: { Accept: 'application/json', ...headers },
       signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
     const data = await res.json();
     db.run(
       `INSERT INTO api_cache (key, value_json, fetched_at) VALUES (?, ?, datetime('now'))
@@ -127,7 +127,7 @@ const PAPER_CHANNEL_MAP = {
 async function paperBuilds(mc, { channel = 'default' } = {}) {
   const data = await cachedJson(
     `loader:paper3:${mc}`,
-    `https://fill.papermc.io/v3/projects/paper/versions/${mc}/builds`,
+    `https://fill.papermc.io/v3/projects/paper/versions/${encodeURIComponent(mc)}/builds`,
     { headers: { 'User-Agent': 'MinecraftServerManager (self-hosted panel; github.com/anefzaoui)' } }
   );
   const wanted = PAPER_CHANNEL_MAP[channel] || PAPER_CHANNEL_MAP.default;
@@ -191,7 +191,10 @@ async function mcAvailableOnServerType(type, mc, { channel = 'default' } = {}) {
       const list = data && data.builds && Array.isArray(data.builds.all) ? data.builds.all : [];
       return { supported: list.length > 0, heard: true };
     }
-  } catch {
+  } catch (err) {
+    // A 404 is the registry answering "no such version": Fill and Purpur both
+    // 404 a Minecraft release they have not built yet, so that is a real hold.
+    if (err && err.status === 404) return { supported: false, heard: true };
     // registry down: never gate on a guess
   }
   return { supported: true, heard: false };

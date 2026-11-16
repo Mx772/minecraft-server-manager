@@ -847,6 +847,8 @@ const NON_DATA_EVENT_TYPES = [
   'backup-warning',
   'backup-deleted',
   'backup-renamed',
+  'backup-verified',
+  'backup-verify-failed',
   'update-check',
   'version-check',
   'storage-scan',

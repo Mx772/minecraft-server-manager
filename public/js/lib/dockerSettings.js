@@ -20,7 +20,7 @@ const REMOVE_ICON_SVG =
 export function initDockerSettings(ids) {
   const nameInput = document.getElementById(ids.name);
   const networkInput = document.getElementById(ids.network);
-  const networkList = document.getElementById(`${ids.network}-networks`);
+  const networkList = document.getElementById(`${ids.network}s`);
   const portsWrap = document.getElementById(ids.ports);
   const bindsWrap = document.getElementById(ids.binds);
 
