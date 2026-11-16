@@ -26,6 +26,9 @@ const MAX_FILES = 500;
 const MAX_TOTAL_BYTES = 256 * 1024 ** 2;
 const ENV_MARKER = 'COPY_CONFIG_SRC=/data/customizations';
 
+const SECRET_MSG =
+  'This customization fills in a secret when the server starts, so it can only be edited in the customizations folder.';
+
 const plural = (n) => `${n} file${n === 1 ? '' : 's'}`;
 
 function mustServer(serverId) {
@@ -81,7 +84,37 @@ async function worldFolders(serverId) {
   return names;
 }
 
-/** @returns {Promise<{path: string, size: number, mtime: number, capturedAt: string|null, capturedPack: {id: string, name: string}|null, state: 'applied'|'pending'}[]>} */
+/**
+ * applied: the live file is what the start-time sync produced or has the copy's content.
+ * pending: the live file is gone or older than the copy, so the next start applies the
+ * copy. changed: the live file differs and is newer than the copy.
+ * Verified against the real image: the sync preserves the SOURCE file's mtime on the
+ * destination exactly, so equal mtimes mean the file was synced from this copy. It also
+ * substitutes ${CFG_*} placeholders, so a correctly applied file can differ in content
+ * from its copy; mtime is therefore checked before content. A newer live file means
+ * something rewrote it after the copy was taken (an upload, a mod rewriting its config,
+ * an edit outside the editor).
+ */
+async function driftState(copyAbs, copySt, live) {
+  if (!live || !live.st.isFile()) return 'pending';
+  const diff = live.st.mtimeMs - copySt.mtimeMs;
+  if (Math.abs(diff) < 1) return 'applied';
+  if (live.st.size === copySt.size && (await sha256File(copyAbs)) === (await sha256File(live.abs))) return 'applied';
+  return diff < 0 ? 'pending' : 'changed';
+}
+
+/**
+ * True when copying the live file over the copy would replace a ${CFG_ placeholder with
+ * a real (possibly secret) value: the copy holds a placeholder and the content differs.
+ */
+async function wouldLosePlaceholder(copyAbs, liveAbs) {
+  const copy = await fsp.readFile(copyAbs).catch(() => null);
+  if (!copy || !copy.includes('${CFG_')) return false;
+  const live = await fsp.readFile(liveAbs).catch(() => null);
+  return !live || !copy.equals(live);
+}
+
+/** @returns {Promise<{path: string, size: number, mtime: number, capturedAt: string|null, capturedPack: {id: string, name: string}|null, liveMtime: number|null, state: 'applied'|'pending'|'changed'}[]>} */
 async function list(serverId) {
   mustServer(serverId);
   const dir = ensureDir(serverId);
@@ -101,14 +134,12 @@ async function list(serverId) {
     if (!st) continue;
     const row = rows.get(rel);
     const live = await fsp.stat(path.join(root, rel)).catch(() => null);
-    let state = 'pending';
-    if (live && live.isFile() && live.size === st.size) {
-      state = (await sha256File(abs)) === (await sha256File(path.join(root, rel))) ? 'applied' : 'pending';
-    }
+    const state = await driftState(abs, st, live ? { abs: path.join(root, rel), st: live } : null);
     out.push({
       path: rel,
       size: st.size,
       mtime: st.mtimeMs,
+      liveMtime: live && live.isFile() ? live.mtimeMs : null,
       capturedAt: row ? row.captured_at : null,
       capturedPack:
         row && row.captured_pack_version_id
@@ -133,6 +164,160 @@ function assertCustomizable(rel, worldNames) {
   }
   const top = rel.split('/')[0];
   if (worldNames.has(top)) throw httpError(400, 'World folders cannot be customized.');
+}
+
+/** Insert or refresh a row: what the copy looked like now and the pack version it was taken from. */
+function recordRow(serverId, rel, sha, pack) {
+  db.run(
+    `INSERT INTO server_customizations
+       (server_id, path, captured_sha256, captured_at, captured_pack_version_id, captured_pack_version_name)
+     VALUES (?, ?, ?, datetime('now'), ?, ?)
+     ON CONFLICT (server_id, path) DO UPDATE SET
+       captured_sha256 = excluded.captured_sha256, captured_at = excluded.captured_at,
+       captured_pack_version_id = excluded.captured_pack_version_id,
+       captured_pack_version_name = excluded.captured_pack_version_name`,
+    serverId,
+    rel,
+    sha,
+    pack ? pack.pinned_version_id : null,
+    pack ? pack.pinned_version_name : null
+  );
+}
+
+const packOf = (serverId) =>
+  db.get('SELECT pinned_version_id, pinned_version_name FROM server_packs WHERE server_id = ?', serverId);
+
+/**
+ * Called by files.writeText after a successful editor save. Saving a live file that
+ * has a copy rewrites the copy too (returns true); saving inside customizations/
+ * edits only the copy, so just its row's sha is refreshed. Never throws: the save
+ * itself already succeeded.
+ */
+async function syncAfterWrite(serverId, rel) {
+  try {
+    const dir = customDir(serverId);
+    if (rel.startsWith(`${DIR_NAME}/`)) {
+      const inner = rel.slice(DIR_NAME.length + 1);
+      const row = db.get('SELECT 1 AS x FROM server_customizations WHERE server_id = ? AND path = ?', serverId, inner);
+      if (row) {
+        db.run(
+          `UPDATE server_customizations SET captured_sha256 = ?, captured_at = datetime('now')
+           WHERE server_id = ? AND path = ?`,
+          await sha256File(safeJoin(dir, inner)),
+          serverId,
+          inner
+        );
+      }
+      return false;
+    }
+    const dest = safeJoin(dir, rel);
+    const lst = await fsp.lstat(dest).catch(() => null);
+    if (!lst || !lst.isFile()) return false;
+    const liveAbs = path.join(serverRoot(serverId), rel);
+    if (await wouldLosePlaceholder(dest, liveAbs)) return false;
+    await fsp.copyFile(liveAbs, dest);
+    recordRow(serverId, rel, await sha256File(dest), packOf(serverId));
+    return true;
+  } catch (err) {
+    logger.warn('Updating a customization after a save failed.', { serverId, err: err.message });
+    return false;
+  }
+}
+
+/**
+ * Walk the items of a keep-current / restore request. `fn(rel, copyAbs, liveAbs)` handles one
+ * file. Each item must be customized (a copy file, or a copy folder holding files).
+ */
+async function eachCustomized(serverId, paths, fn) {
+  mustServer(serverId);
+  if (!Array.isArray(paths) || !paths.length) throw httpError(400, 'Select at least one file.');
+  if (paths.length > MAX_FILES) throw httpError(400, `Select at most ${MAX_FILES} items at a time.`);
+  const dir = ensureDir(serverId);
+  const root = serverRoot(serverId);
+  const results = [];
+  let fileCount = 0;
+  const seen = new Set();
+  for (const raw of paths) {
+    const item = String(raw);
+    if (seen.has(item)) continue;
+    seen.add(item);
+    try {
+      const { rel } = files.resolvePath(serverId, item);
+      const copyAbs = rel === '' || rel === DIR_NAME || rel.startsWith(`${DIR_NAME}/`) ? null : safeJoin(dir, rel);
+      const lst = copyAbs ? await fsp.lstat(copyAbs).catch(() => null) : null;
+      if (!lst || lst.isSymbolicLink() || !(lst.isFile() || lst.isDirectory())) {
+        throw httpError(404, 'That file is not customized.');
+      }
+      const rels = lst.isDirectory() ? (await walkFiles(copyAbs)).map((r) => `${rel}/${r}`) : [rel];
+      if (!rels.length) throw httpError(404, 'That file is not customized.');
+      for (const r of rels) await fn(r, safeJoin(dir, r), safeJoin(root, r));
+      fileCount += rels.length;
+      results.push({ path: rel, ok: true, count: rels.length });
+    } catch (err) {
+      if (err.status) results.push({ path: item, ok: false, error: err.message });
+      else {
+        logger.warn('Updating a customization failed.', { serverId, err: err.message });
+        results.push({ path: item, ok: false, error: 'Something went wrong with that item.' });
+      }
+    }
+  }
+  const succeeded = results.filter((r) => r.ok).length;
+  return { results, succeeded, failed: results.length - succeeded, fileCount };
+}
+
+const okPaths = (results) =>
+  results
+    .filter((r) => r.ok)
+    .map((r) => r.path)
+    .slice(0, 50);
+
+/** Replace each customization copy with the server's current version of the file. */
+async function keepCurrent(serverId, paths, { actor = 'system' } = {}) {
+  const pack = packOf(serverId);
+  const out = await eachCustomized(serverId, paths, async (rel, copyAbs, liveAbs) => {
+    const live = await fsp.lstat(liveAbs).catch(() => null);
+    if (!live || !live.isFile()) throw httpError(404, 'That file is not on the server right now.');
+    if (await wouldLosePlaceholder(copyAbs, liveAbs)) {
+      throw httpError(400, SECRET_MSG);
+    }
+    await fsp.copyFile(liveAbs, copyAbs);
+    recordRow(serverId, rel, await sha256File(copyAbs), pack);
+  });
+  if (out.succeeded > 0) {
+    recordEvent({
+      serverId,
+      actor,
+      type: 'customizations-updated',
+      summary: `Updated ${plural(out.fileCount)} from the server's current version.`,
+      details: { count: out.fileCount, failed: out.failed, paths: okPaths(out.results) },
+    });
+    indexer.scheduleScan();
+  }
+  return { results: out.results, succeeded: out.succeeded, failed: out.failed };
+}
+
+/**
+ * Copy each customization copy over the live file right now. A running server may
+ * rewrite a config it holds open, which is why the start-time sync still matters.
+ */
+async function restore(serverId, paths, { actor = 'system' } = {}) {
+  const out = await eachCustomized(serverId, paths, async (rel, copyAbs, liveAbs) => {
+    const live = await fsp.lstat(liveAbs).catch(() => null);
+    if (live && !live.isFile()) throw httpError(400, 'That path on the server is not a regular file.');
+    await fsp.mkdir(path.dirname(liveAbs), { recursive: true });
+    await fsp.copyFile(copyAbs, liveAbs);
+  });
+  if (out.succeeded > 0) {
+    recordEvent({
+      serverId,
+      actor,
+      type: 'customizations-restored',
+      summary: `Restored ${plural(out.fileCount)} over the server's current versions.`,
+      details: { count: out.fileCount, failed: out.failed, paths: okPaths(out.results) },
+    });
+    indexer.scheduleScan();
+  }
+  return { results: out.results, succeeded: out.succeeded, failed: out.failed };
 }
 
 /**
@@ -191,7 +376,7 @@ async function add(serverId, paths, { actor = 'system' } = {}) {
   files.assertRoom(serverId, totalBytes);
   await files.assertDiskFree(totalBytes);
 
-  const pack = db.get('SELECT pinned_version_id, pinned_version_name FROM server_packs WHERE server_id = ?', serverId);
+  const pack = packOf(serverId);
   const results = [];
   let fileCount = 0;
   for (const p of plan) {
@@ -202,26 +387,18 @@ async function add(serverId, paths, { actor = 'system' } = {}) {
     try {
       for (const rel of p.rels) {
         const dest = safeJoin(dir, rel);
+        if (await wouldLosePlaceholder(dest, path.join(root, rel))) throw httpError(400, SECRET_MSG);
         await fsp.mkdir(path.dirname(dest), { recursive: true });
         await fsp.copyFile(path.join(root, rel), dest);
-        db.run(
-          `INSERT INTO server_customizations
-             (server_id, path, captured_sha256, captured_at, captured_pack_version_id, captured_pack_version_name)
-           VALUES (?, ?, ?, datetime('now'), ?, ?)
-           ON CONFLICT (server_id, path) DO UPDATE SET
-             captured_sha256 = excluded.captured_sha256, captured_at = excluded.captured_at,
-             captured_pack_version_id = excluded.captured_pack_version_id,
-             captured_pack_version_name = excluded.captured_pack_version_name`,
-          serverId,
-          rel,
-          await sha256File(dest),
-          pack ? pack.pinned_version_id : null,
-          pack ? pack.pinned_version_name : null
-        );
+        recordRow(serverId, rel, await sha256File(dest), pack);
         fileCount++;
       }
       results.push({ path: p.item, ok: true, count: p.rels.length });
     } catch (err) {
+      if (err.status) {
+        results.push({ path: p.item, ok: false, error: err.message });
+        continue;
+      }
       logger.warn('Copying a file into customizations failed.', { serverId, err: err.message });
       results.push({ path: p.item, ok: false, error: 'Something went wrong with that item.' });
     }
@@ -339,4 +516,16 @@ async function pruneEmptyDirs(rootAbs, start) {
   }
 }
 
-module.exports = { list, add, remove, customizedPaths, ensureDir, DIR_NAME, MAX_FILES, MAX_TOTAL_BYTES };
+module.exports = {
+  list,
+  add,
+  remove,
+  keepCurrent,
+  restore,
+  syncAfterWrite,
+  customizedPaths,
+  ensureDir,
+  DIR_NAME,
+  MAX_FILES,
+  MAX_TOTAL_BYTES,
+};

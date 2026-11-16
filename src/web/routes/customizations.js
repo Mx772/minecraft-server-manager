@@ -40,6 +40,24 @@ router.post(
   })
 );
 
+router.post(
+  '/keep-current',
+  asyncHandler(async (req, res) => {
+    const { paths } = pathsBody.parse(req.body);
+    const out = await customizations.keepCurrent(req.params.id, paths, { actor: actorOf(req) });
+    res.json({ ok: out.failed === 0, ...out });
+  })
+);
+
+router.post(
+  '/restore',
+  asyncHandler(async (req, res) => {
+    const { paths } = pathsBody.parse(req.body);
+    const out = await customizations.restore(req.params.id, paths, { actor: actorOf(req) });
+    res.json({ ok: out.failed === 0, ...out });
+  })
+);
+
 router.use(makeJsonErrorHandler('customizations'));
 
 module.exports = router;

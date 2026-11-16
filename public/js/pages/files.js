@@ -519,7 +519,11 @@ function init(rootEl) {
           onClick: async () => {
             const saved = await post(`${base}/write`, { path, content: textarea.value });
             if (!saved) return false;
-            toast(`${name} saved (${fmtBytes(saved.size)}).`);
+            toast(
+              saved.customizationUpdated
+                ? 'Saved. Your customization was updated too.'
+                : `${name} saved (${fmtBytes(saved.size)}).`
+            );
             reload();
           },
         },

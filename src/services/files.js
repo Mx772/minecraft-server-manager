@@ -155,12 +155,14 @@ async function writeText(serverId, relPath, content, { actor = 'system' } = {}) 
   // plain write would silently revert on the next restart.
   if (serverId && rel === 'server.properties' && servers.getServer(serverId)) {
     const result = servers.writeServerProperties(serverId, content, { actor });
+    const customizationUpdated = await syncCustomization(serverId, rel);
     recordEvent({
       serverId,
       actor,
       type: 'file-written',
-      summary: `File ${existing ? 'saved' : 'created'}: server.properties (${humanBytes(bytes)}).`,
+      summary: `File ${existing ? 'saved' : 'created'}: server.properties (${humanBytes(bytes)}).${customizationNote(customizationUpdated)}`,
       details: {
+        ...(customizationUpdated ? { customizationUpdated } : {}),
         path: rel,
         sizeBytes: bytes,
         created: !existing,
@@ -168,7 +170,13 @@ async function writeText(serverId, relPath, content, { actor = 'system' } = {}) 
         unlocked: result.unlocked,
       },
     });
-    return { path: rel, size: bytes, rebuildNeeded: result.rebuildNeeded, unlocked: result.unlocked };
+    return {
+      path: rel,
+      size: bytes,
+      rebuildNeeded: result.rebuildNeeded,
+      unlocked: result.unlocked,
+      ...(customizationUpdated ? { customizationUpdated } : {}),
+    };
   }
 
   // Random suffix: two saves in the same millisecond (two tabs, a double
@@ -183,14 +191,29 @@ async function writeText(serverId, relPath, content, { actor = 'system' } = {}) 
     throw err;
   }
 
+  const customizationUpdated = await syncCustomization(serverId, rel);
   recordEvent({
     serverId: serverId || null,
     actor,
     type: 'file-written',
-    summary: `File ${existing ? 'saved' : 'created'}: ${rel} (${humanBytes(bytes)}).`,
-    details: { path: rel, sizeBytes: bytes, created: !existing },
+    summary: `File ${existing ? 'saved' : 'created'}: ${rel} (${humanBytes(bytes)}).${customizationNote(customizationUpdated)}`,
+    details: {
+      path: rel,
+      sizeBytes: bytes,
+      created: !existing,
+      ...(customizationUpdated ? { customizationUpdated } : {}),
+    },
   });
-  return { path: rel, size: bytes };
+  return { path: rel, size: bytes, ...(customizationUpdated ? { customizationUpdated } : {}) };
+}
+
+const customizationNote = (updated) => (updated ? ' Its customization was updated too.' : '');
+
+/** Keep a customization copy in step with an editor save (server scope only). True when a copy was rewritten. */
+async function syncCustomization(serverId, rel) {
+  if (!serverId) return false;
+  // Mid-function require: customizations already requires files (cycle-breaker).
+  return require('./customizations').syncAfterWrite(serverId, rel);
 }
 
 async function mkdir(serverId, relPath, { actor = 'system' } = {}) {
