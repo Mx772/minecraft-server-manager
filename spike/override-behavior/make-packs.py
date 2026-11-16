@@ -15,12 +15,36 @@ def fake_jar(label):
     return buf.getvalue()
 
 
+TOML_V1 = """# Top comment
+[general]
+    # Radiation toggle
+    radiation = true
+    # Spawn cap
+    spawnCap = 70
+
+[[guilds]]
+    guildId = "111"
+    channel = "222"
+"""
+
+
 def overrides(v):
     files = {
         "config/spike.toml": f'value = "pack-v{v}"\n',
         "kubejs/server_scripts/spike.js": f"// pack-v{v}\n",
         f"mods/fake-mod-{v}.0.jar": fake_jar(f"fake mod {v}.0"),
     }
+    if v == 1:
+        toml = TOML_V1
+    else:
+        toml = (
+            TOML_V1.replace("radiation =", "radiationEnabled =")
+            .replace("spawnCap = 70", "spawnCap = 80")
+            .replace("    spawnCap = 80\n", '    spawnCap = 80\n    newInV2 = "x"\n')
+        )
+    files["config/patchme-common.toml"] = toml
+    files["config/patchme.json"] = '{"limits": {"maxChunks": 10, "list": ["a"]}, "flag": false}\n'
+    files["config/patchme.properties"] = "# comment\nfoo=1\nbar=2\n"
     if v == 1:
         files["config/removed-in-v2.toml"] = 'value = "only-in-v1"\n'
     return files

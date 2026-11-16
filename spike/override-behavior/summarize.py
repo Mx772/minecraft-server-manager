@@ -120,6 +120,130 @@ for st in ("install1", "upgrade"):
         a, b = g(env_s, st, k + "_mtime_src"), g(env_s, st, k + "_mtime_dst")
         out.append(f"| {st} | {label} | {a} | {b} | {yn(a == b)} |")
 
+import re
+
+
+def cell(v):
+    return v.replace("|", "\\|")
+
+
+def has(text, pattern):
+    return re.search(pattern, text) is not None
+
+
+def toml_checks(t):
+    return [
+        ("bool", has(t, r"radiation\s*=\s*false")),
+        ("int", has(t, r"spawnCap\s*=\s*40(\\n|$)")),
+        ("guilds[0]", has(t, r'channel\s*=\s*"333"')),
+    ]
+
+
+def json_checks(j):
+    return [
+        ("set", has(j, r'"maxChunks"\s*:\s*25')),
+        ("add", has(j, r'"a"\s*,\s*"b"')),
+        ("put", has(j, r'"extra"\s*:\s*"y"')),
+    ]
+
+
+def props_checks(p):
+    return [
+        ("set", has(p, r"foo\s*[=:]\s*9(\\n|$)")),
+        ("placeholder", has(p, r"bar\s*[=:]\s*fromenv")),
+    ]
+
+
+PH = "patch-happy"
+PM = "patch-missing-path"
+PR = "patch-renamed-after-upgrade"
+STEPS = ("install1", "restart", "upgrade")
+
+out += [
+    "",
+    "## Q8: do TOML/JSON/properties patches apply? (patch-happy)",
+    "",
+    "Restart re-runs the same patch on an already-patched file (idempotency; `$add` may append twice). "
+    "The upgrade boot gets v2 files where `radiation` was renamed.",
+    "",
+    "| step | exit | toml $set bool | toml $set int (value-type) | toml `$.guilds[0]` | json $set | json $add appends | json $put adds key | props $set | props placeholder |",
+    "|---|---|---|---|---|---|---|---|---|---|",
+]
+for st in STEPS:
+    t, j, pr = g(PH, st, "patch_toml"), g(PH, st, "patch_json"), g(PH, st, "patch_props")
+    cs = [yn(v) for _, v in toml_checks(t) + json_checks(j) + props_checks(pr)]
+    out.append(f"| {st} | {g(PH, st, 'exit_code')} | " + " | ".join(cs) + " |")
+out += ["", "Raw file contents (newlines escaped):", "", "| step | toml | json | properties |", "|---|---|---|---|"]
+for st in STEPS:
+    out.append(
+        f"| {st} | `{cell(g(PH, st, 'patch_toml'))}` | `{cell(g(PH, st, 'patch_json'))}` | `{cell(g(PH, st, 'patch_props'))}` |"
+    )
+
+NL = chr(92) + "n"
+T_BEFORE = '# Top comment\\n[general]\\n    # Radiation toggle\\n    radiation = true\\n    # Spawn cap\\n    spawnCap = 70\\n\\n[[guilds]]\\n    guildId = "111"\\n    channel = "222"\\n'
+J_BEFORE = '{"limits": {"maxChunks": 10, "list": ["a"]}, "flag": false}\\n'
+P_BEFORE = "# comment\\nfoo=1\\nbar=2\\n"
+t1, j1, p1 = g(PH, "install1", "patch_toml"), g(PH, "install1", "patch_json"), g(PH, "install1", "patch_props")
+out += [
+    "",
+    "## Q9: are comments, blank lines and indentation preserved? (patch-happy, install1)",
+    "",
+    "| format | comments kept? | blank line kept? | indentation kept? | before | after |",
+    "|---|---|---|---|---|---|",
+    f"| toml | {yn('# Top comment' in t1 and '# Radiation toggle' in t1 and '# Spawn cap' in t1)} | "
+    f"{yn(NL + NL + '[[guilds]]' in t1)} | {yn(NL + '    spawnCap' in t1 and NL + '    channel' in t1)} | "
+    f"`{cell(T_BEFORE)}` | `{cell(t1)}` |",
+    f"| json | n/a | n/a | n/a (compact original; reformatted: {yn(j1 != J_BEFORE and ': ' not in j1)}) | "
+    f"`{cell(J_BEFORE)}` | `{cell(j1)}` |",
+    f"| properties | {yn('# comment' in p1)} | n/a | n/a | `{cell(P_BEFORE)}` | `{cell(p1)}` |",
+    "",
+    "Key order in toml (radiation before spawnCap before guilds): "
+    + yn(has(t1, r"radiation.*spawnCap.*\[\[guilds\]\]")),
+]
+
+out += [
+    "",
+    "## Q10: patch definition for a missing target file (patch-happy, `/data/config/not-there.toml`)",
+    "",
+    "| step | exit | file created? | patch log lines |",
+    "|---|---|---|---|",
+]
+for st in STEPS:
+    out.append(f"| {st} | {g(PH, st, 'exit_code')} | {g(PH, st, 'not_there')} | {cell(g(PH, st, 'patch_log'))} |")
+
+out += [
+    "",
+    "## Q11: `$set` on a missing path (patch-missing-path)",
+    "",
+    "The bad op sits between the first and second toml ops; json and properties patches follow it.",
+    "",
+    "| step | exit | toml op before bad (bool) | toml op after bad (int) | json $set | props $set | patch log lines |",
+    "|---|---|---|---|---|---|---|",
+]
+for st in STEPS:
+    t, j, pr = g(PM, st, "patch_toml"), g(PM, st, "patch_json"), g(PM, st, "patch_props")
+    out.append(
+        f"| {st} | {g(PM, st, 'exit_code')} | {yn(toml_checks(t)[0][1])} | {yn(toml_checks(t)[1][1])} | "
+        f"{yn(json_checks(j)[0][1])} | {yn(props_checks(pr)[0][1])} | {cell(g(PM, st, 'patch_log'))} |"
+    )
+out += ["", "| step | toml | json | properties |", "|---|---|---|---|"]
+for st in STEPS:
+    out.append(
+        f"| {st} | `{cell(g(PM, st, 'patch_toml'))}` | `{cell(g(PM, st, 'patch_json'))}` | `{cell(g(PM, st, 'patch_props'))}` |"
+    )
+
+out += [
+    "",
+    "## Q12: upgrade renames a patched key (patch-renamed-after-upgrade)",
+    "",
+    "| step | exit | toml | patch log lines |",
+    "|---|---|---|---|",
+]
+for st in STEPS:
+    out.append(
+        f"| {st} | {g(PR, st, 'exit_code')} | `{cell(g(PR, st, 'patch_toml'))}` | {cell(g(PR, st, 'patch_log'))} |"
+    )
+
 out += ["", "## Step status", "", "| scenario | step | exit code | notes |", "|---|---|---|---|"]
 for (s, st), d in rows.items():
     if "exit_code" in d:

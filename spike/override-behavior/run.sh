@@ -59,6 +59,20 @@ snapshot_env() { # scenario step datadir
   rec "$s" "$st" spike_mtime_src "$(mtime "$CUSTOM_ENV/config/spike.toml")"
 }
 
+# Full file contents with newlines/tabs escaped, so comments, blank lines and indentation are visible.
+esc_file() {
+  if [ -f "$1" ]; then tr -d '\r' < "$1" | head -c 1500 | awk 'BEGIN{ORS=""} {gsub(/\t/,"\\t"); print $0 "\\n"}'; else echo absent; fi
+}
+
+snapshot_patch() { # scenario step datadir logfile
+  local s=$1 st=$2 d=$3 log=$4
+  rec "$s" "$st" patch_toml "$(esc_file "$d/config/patchme-common.toml")"
+  rec "$s" "$st" patch_json "$(esc_file "$d/config/patchme.json")"
+  rec "$s" "$st" patch_props "$(esc_file "$d/config/patchme.properties")"
+  rec "$s" "$st" not_there "$(exists "$d/config/not-there.toml")"
+  rec "$s" "$st" patch_log "$(grep -i patch "$log" | cut -c1-300 | head -30 | awk 'BEGIN{ORS=" ## "} {print}')"
+}
+
 # run_step scenario step platform pack -- extra docker args...
 run_step() {
   local s=$1 st=$2 platform=$3 pack=$4
@@ -80,7 +94,10 @@ run_step() {
   local hint
   hint="$(grep -iE 'already|up to date|up-to-date|skipp|install(ing|ed)|extract|override|remov|delet|sync|copy|appl' "$log" | head -8 | tr '\n|' ' /' | cut -c1-400)"
   rec "$s" "$st" log_hint "${hint:-none}"
-  if [ "$rc" -ne 0 ]; then
+  if [ "$rc" -ne 0 ] && [ "${ALLOW_FAIL:-0}" = 1 ]; then
+    rec "$s" "$st" note "container exited $rc (allowed for this scenario)"
+    tail -n 60 "$log" > "$OUT/$s/$st.fail-tail.log"
+  elif [ "$rc" -ne 0 ]; then
     INFRA_FAIL=1
     rec "$s" "$st" note "container exited $rc"
     echo "::error::$s/$st: container exited $rc. Last 60 log lines follow."
@@ -89,6 +106,7 @@ run_step() {
   fi
   snapshot "$s" "$st" "$d"
   if [ "$s" = sync-env-substitution ]; then snapshot_env "$s" "$st" "$d"; fi
+  case "$s" in patch-*) snapshot_patch "$s" "$st" "$d" "$log" ;; esac
   return "$rc"
 }
 
@@ -130,6 +148,61 @@ scenario() {
   run_step "$s" upgrade "$platform" "$v2" -- "$@" || return 0
 }
 
+# PATCH_DEFINITIONS scenarios: a patch set file mounted read-only at /patches/set.json.
+PATCHDIR="$OUT/patches"
+mkdir -p "$PATCHDIR"
+write_patchset() { # name, include bad-path op (0/1)
+  local bad=''
+  if [ "$2" = 1 ]; then bad='{"$set": {"path": "$.general.doesNotExist", "value": 1}},'; fi
+  cat > "$PATCHDIR/$1.json" <<EOF
+{"patches": [
+ {"file": "/data/config/patchme-common.toml", "ops": [
+   {"\$set": {"path": "\$.general.radiation", "value": false, "value-type": "bool"}},
+   $bad
+   {"\$set": {"path": "\$.general.spawnCap", "value": "40", "value-type": "int"}},
+   {"\$set": {"path": "\$.guilds[0].channel", "value": "333"}}
+ ]},
+ {"file": "/data/config/patchme.json", "ops": [
+   {"\$set": {"path": "\$.limits.maxChunks", "value": 25}},
+   {"\$add": {"path": "\$.limits.list", "value": "b"}},
+   {"\$put": {"path": "\$.limits", "key": "extra", "value": "y"}}
+ ]},
+ {"file": "/data/config/patchme.properties", "ops": [
+   {"\$set": {"path": "\$.foo", "value": "9"}},
+   {"\$set": {"path": "\$.bar", "value": "\${CFG_PATCH_VAL}"}}
+ ]},
+ {"file": "/data/config/not-there.toml", "ops": [
+   {"\$set": {"path": "\$.a", "value": 1}}
+ ]}
+]}
+EOF
+}
+write_patchset happy 0
+write_patchset missing 1
+cat > "$PATCHDIR/renamed.json" <<'EOF'
+{"patches": [
+ {"file": "/data/config/patchme-common.toml", "ops": [
+   {"$set": {"path": "$.general.radiation", "value": false, "value-type": "bool"}}
+ ]}
+]}
+EOF
+chmod -R a+rX "$PATCHDIR"
+
+# patch_scenario name patchset [extra docker args]: install v1, restart v1, upgrade v2; failures are data.
+patch_scenario() {
+  local s=$1 set=$2
+  shift 2
+  echo "=== scenario: $s"
+  mkdir -p "$OUT/$s/data"
+  chmod 777 "$OUT/$s/data"
+  export ALLOW_FAIL=1
+  local args=(-v "$PATCHDIR/$set.json:/patches/set.json:ro" -e PATCH_DEFINITIONS=/patches/set.json "$@")
+  run_step "$s" install1 modrinth /packs/v1.mrpack -- "${args[@]}"
+  run_step "$s" restart modrinth /packs/v1.mrpack -- "${args[@]}"
+  run_step "$s" upgrade modrinth /packs/v2.mrpack -- "${args[@]}"
+  unset ALLOW_FAIL
+}
+
 EXTRA_FILES='config/spike.toml</customizations/config/spike.toml,kubejs/server_scripts/spike.js</customizations/kubejs/server_scripts/spike.js'
 CUSTOM_MOUNT=(-v "$CUSTOM:/customizations:ro")
 
@@ -140,6 +213,10 @@ scenario extra-files modrinth "${CUSTOM_MOUNT[@]}" -e "APPLY_EXTRA_FILES=$EXTRA_
 scenario sync-default modrinth "${CUSTOM_MOUNT[@]}" -e COPY_CONFIG_SRC=/customizations -e COPY_CONFIG_DEST=/data
 scenario sync-no-skip-newer modrinth "${CUSTOM_MOUNT[@]}" -e COPY_CONFIG_SRC=/customizations -e COPY_CONFIG_DEST=/data -e SYNC_SKIP_NEWER_IN_DESTINATION=false
 scenario sync-env-substitution modrinth -v "$CUSTOM_ENV:/customizations:ro" -e COPY_CONFIG_SRC=/customizations -e COPY_CONFIG_DEST=/data -e SYNC_SKIP_NEWER_IN_DESTINATION=false -e CFG_SPIKE_TOKEN=spike-secret-123
+
+patch_scenario patch-happy happy -e CFG_PATCH_VAL=fromenv
+patch_scenario patch-missing-path missing -e CFG_PATCH_VAL=fromenv
+patch_scenario patch-renamed-after-upgrade renamed
 
 # Best-effort CurseForge scenarios (need an API key).
 if [ -n "${CF_API_KEY:-}" ]; then

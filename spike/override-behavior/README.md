@@ -32,6 +32,18 @@ The job summary and the `summary.md` artifact hold one table per question:
   copy is unchanged)?
 - Q7: does the sync preserve the source file's mtime on the destination (`spike.toml` and
   `bridge.toml`, after install1 and after the upgrade)? Both mtimes are printed.
+- Q8 to Q12 test `PATCH_DEFINITIONS` (a JSON patch set mounted at `/patches/set.json`) in the
+  `patch-happy`, `patch-missing-path` and `patch-renamed-after-upgrade` scenarios. Every pack
+  override also carries `config/patchme-common.toml`, `patchme.json` and `patchme.properties`
+  (v2 renames the toml `radiation` key to `radiationEnabled`). These scenarios allow a non-zero
+  container exit code, because a failing patch is the thing being observed.
+  - Q8: do TOML, JSON and properties patches apply (`$set` with `value-type`, `$.guilds[0]`,
+    `$add`, `$put`, `${CFG_*}` placeholders)? Restart and upgrade rows show repeat behaviour.
+  - Q9: are comments, blank lines, indentation and key order preserved (before and after shown)?
+  - Q10: a definition for a missing target file: skipped with a warning, an error, or created?
+  - Q11: a `$set` on a missing path: does the container fail (exit code), and are the other
+    patches still applied?
+  - Q12: an upgrade renames a patched key: what happens on the upgrade boot?
 
 A "NO" is a finding, not a failure. The job fails only on infrastructure problems (container exit
 code other than 0, or setup not producing expected files). `results.tsv` is the raw data, and each
