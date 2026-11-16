@@ -18,7 +18,12 @@ const { safeJoin } = require('../storage/pathGuard');
 const { recordEvent } = require('../events');
 const indexer = require('../storage/indexer');
 const servers = require('./servers');
+const { serializeError } = require('../utils/logSanitize');
+const logger = require('../logger')(path.basename(__filename));
 
+const MAX_BULK_ITEMS = 500;
+const MAX_BULK_DETAIL_PATHS = 50;
+const MAX_ZIP_BYTES = 2 * 1024 ** 3; // one zip download of a selection
 const MAX_TEXT_BYTES = 8 * 1024 * 1024; // editor cap
 const MAX_TEXT_MB_LABEL = '8 MB';
 // "find in files" limits - keep a search over a big modpack dir bounded.
@@ -231,7 +236,7 @@ async function rename(serverId, relPath, newName, { actor = 'system' } = {}) {
 }
 
 /** Move into a destination directory (keeps the base name). */
-async function move(serverId, relPath, destRel, { actor = 'system' } = {}) {
+async function move(serverId, relPath, destRel, { actor = 'system', quiet = false } = {}) {
   const { abs, rel } = resolvePath(serverId, relPath);
   guardProtected(serverId, rel);
   if (!rel) throw httpError(400, 'Cannot move the root.');
@@ -246,18 +251,21 @@ async function move(serverId, relPath, destRel, { actor = 'system' } = {}) {
   if (fs.existsSync(target)) throw httpError(409, `"${path.basename(abs)}" already exists in the destination.`);
   await moveEntry(abs, target);
   const toRel = dest.rel ? `${dest.rel}/${path.basename(abs)}` : path.basename(abs);
-  recordEvent({
-    serverId: serverId || null,
-    actor,
-    type: 'file-moved',
-    summary: `Moved: ${rel} → ${toRel}.`,
-    details: { from: rel, to: toRel },
-  });
+  if (!quiet) {
+    recordEvent({
+      serverId: serverId || null,
+      actor,
+      type: 'file-moved',
+      summary: `Moved: ${rel} → ${toRel}.`,
+      details: { from: rel, to: toRel },
+    });
+    indexer.scheduleScan();
+  }
   return { path: toRel };
 }
 
 /** Copy into a destination directory (recursive; quota-checked). */
-async function copy(serverId, relPath, destRel, { actor = 'system' } = {}) {
+async function copy(serverId, relPath, destRel, { actor = 'system', quiet = false } = {}) {
   const { abs, rel } = resolvePath(serverId, relPath);
   // Without this a copy of panel.db (or .session-secret) into any folder could
   // then be downloaded from there, which is exactly what the guard forbids.
@@ -279,19 +287,21 @@ async function copy(serverId, relPath, destRel, { actor = 'system' } = {}) {
   if (fs.existsSync(target)) throw httpError(409, `"${path.basename(abs)}" already exists in the destination.`);
   await fsp.cp(abs, target, { recursive: true });
   const toRel = dest.rel ? `${dest.rel}/${path.basename(abs)}` : path.basename(abs);
-  recordEvent({
-    serverId: serverId || null,
-    actor,
-    type: 'file-copied',
-    summary: `Copied: ${rel} → ${toRel} (${humanBytes(bytes)}).`,
-    details: { from: rel, to: toRel, sizeBytes: bytes },
-  });
-  indexer.scheduleScan();
+  if (!quiet) {
+    recordEvent({
+      serverId: serverId || null,
+      actor,
+      type: 'file-copied',
+      summary: `Copied: ${rel} → ${toRel} (${humanBytes(bytes)}).`,
+      details: { from: rel, to: toRel, sizeBytes: bytes },
+    });
+    indexer.scheduleScan();
+  }
   return { path: toRel, sizeBytes: bytes };
 }
 
 /** Delete a file or folder (recursive). Returns freed bytes. */
-async function remove(serverId, relPath, { actor = 'system' } = {}) {
+async function remove(serverId, relPath, { actor = 'system', quiet = false } = {}) {
   const { abs, rel } = resolvePath(serverId, relPath);
   guardProtected(serverId, rel);
   if (!rel) throw httpError(400, 'Cannot delete the root folder.');
@@ -299,15 +309,205 @@ async function remove(serverId, relPath, { actor = 'system' } = {}) {
   if (!st) throw httpError(404, 'Not found');
   const freedBytes = st.isDirectory() ? await dirSize(abs) : st.size;
   await fsp.rm(abs, { recursive: true, force: true });
-  recordEvent({
-    serverId: serverId || null,
-    actor,
-    type: 'file-deleted',
-    summary: `Deleted: ${rel} (${humanBytes(freedBytes)} freed).`,
-    details: { path: rel, freedBytes },
-  });
-  indexer.scheduleScan();
+  if (!quiet) {
+    recordEvent({
+      serverId: serverId || null,
+      actor,
+      type: 'file-deleted',
+      summary: `Deleted: ${rel} (${humanBytes(freedBytes)} freed).`,
+      details: { path: rel, freedBytes },
+    });
+    indexer.scheduleScan();
+  }
   return { freedBytes };
+}
+
+// ---- Bulk operations --------------------------------------------------------
+
+/**
+ * Validate a multi-select. Dedupes, drops any path nested inside another
+ * selected path (a folder and its child = just the folder), and rejects an
+ * empty / oversized list or the root. A path that escapes the scope is kept
+ * as-is so the per-item call fails just that item.
+ * @returns {string[]} scope-relative paths (or the raw string for an escape)
+ */
+function normalizeSelection(serverId, paths) {
+  if (!Array.isArray(paths) || !paths.length) throw httpError(400, 'Select at least one item.');
+  if (paths.length > MAX_BULK_ITEMS) throw httpError(400, `Select at most ${MAX_BULK_ITEMS} items at a time.`);
+  const seen = new Set();
+  const items = [];
+  for (const raw of paths) {
+    let rel;
+    try {
+      rel = resolvePath(serverId, String(raw)).rel;
+    } catch {
+      rel = null;
+    }
+    if (rel === '') throw httpError(400, 'The top folder cannot be selected.');
+    const key = rel === null ? String(raw) : rel;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push({ key, resolved: rel !== null });
+  }
+  const resolved = items.filter((i) => i.resolved).map((i) => i.key);
+  return items
+    .filter((i) => !i.resolved || !resolved.some((other) => other !== i.key && i.key.startsWith(`${other}/`)))
+    .map((i) => i.key);
+}
+
+const plural = (n, word = 'item') => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Run `fn` per item, sequentially, collecting per-item outcomes. */
+async function runBulk(serverId, items, fn) {
+  const results = [];
+  for (const item of items) {
+    try {
+      const out = await fn(item);
+      results.push({ ...out, path: item, ok: true });
+    } catch (err) {
+      if (err && err.status) {
+        results.push({ path: item, ok: false, error: err.message });
+      } else {
+        logger.warn('A bulk file operation failed on one item.', {
+          serverId: serverId || null,
+          err: serializeError(err, { includeStack: false }),
+        });
+        results.push({ path: item, ok: false, error: 'Something went wrong with that item.' });
+      }
+    }
+  }
+  const succeeded = results.filter((r) => r.ok).length;
+  return { results, succeeded, failed: results.length - succeeded };
+}
+
+function bulkSummary(base, failed, verb) {
+  return failed > 0 ? `${base} ${plural(failed)} could not be ${verb}.` : base;
+}
+
+function destLabel(serverId, dest) {
+  return dest.rel ? `${dest.rel}/` : serverId ? 'the server folder' : 'the data folder';
+}
+
+function finishBulk(serverId, actor, type, summary, details, outcome) {
+  if (outcome.succeeded > 0) {
+    recordEvent({ serverId: serverId || null, actor, type, summary, details });
+    indexer.scheduleScan();
+  }
+}
+
+function detailPaths(results) {
+  return results
+    .filter((r) => r.ok)
+    .map((r) => r.path)
+    .slice(0, MAX_BULK_DETAIL_PATHS);
+}
+
+/** Delete many items. Returns { results, succeeded, failed, freedBytes }. */
+async function removeMany(serverId, paths, { actor = 'system' } = {}) {
+  const items = normalizeSelection(serverId, paths);
+  const outcome = await runBulk(serverId, items, (item) => remove(serverId, item, { actor, quiet: true }));
+  const freedBytes = outcome.results.reduce((n, r) => n + (r.ok ? r.freedBytes : 0), 0);
+  finishBulk(
+    serverId,
+    actor,
+    'files-bulk-deleted',
+    bulkSummary(`Deleted ${plural(outcome.succeeded)} (${humanBytes(freedBytes)} freed).`, outcome.failed, 'deleted'),
+    { count: outcome.succeeded, failed: outcome.failed, freedBytes, paths: detailPaths(outcome.results) },
+    outcome
+  );
+  return { ...outcome, freedBytes };
+}
+
+/** Move many items into one destination folder. */
+async function moveMany(serverId, paths, destRel, { actor = 'system' } = {}) {
+  const items = normalizeSelection(serverId, paths);
+  const dest = resolvePath(serverId, destRel);
+  const outcome = await runBulk(serverId, items, (item) => move(serverId, item, destRel, { actor, quiet: true }));
+  finishBulk(
+    serverId,
+    actor,
+    'files-bulk-moved',
+    bulkSummary(`Moved ${plural(outcome.succeeded)} to ${destLabel(serverId, dest)}.`, outcome.failed, 'moved'),
+    { count: outcome.succeeded, failed: outcome.failed, to: dest.rel, paths: detailPaths(outcome.results) },
+    outcome
+  );
+  return outcome;
+}
+
+/** Copy many items into one destination folder. */
+async function copyMany(serverId, paths, destRel, { actor = 'system' } = {}) {
+  const items = normalizeSelection(serverId, paths);
+  const dest = resolvePath(serverId, destRel);
+  const outcome = await runBulk(serverId, items, (item) => copy(serverId, item, destRel, { actor, quiet: true }));
+  finishBulk(
+    serverId,
+    actor,
+    'files-bulk-copied',
+    bulkSummary(`Copied ${plural(outcome.succeeded)} to ${destLabel(serverId, dest)}.`, outcome.failed, 'copied'),
+    { count: outcome.succeeded, failed: outcome.failed, to: dest.rel, paths: detailPaths(outcome.results) },
+    outcome
+  );
+  return outcome;
+}
+
+/**
+ * Validate a selection for a zip download and flatten it to files. Symlinks are
+ * skipped (never followed out of the data folder), matching dirSize/copy.
+ * @returns {Promise<{files: {abs: string, name: string}[], emptyDirs: string[], totalBytes: number}>}
+ *   `name` is the zip entry path; each item keeps its base name as the top level.
+ */
+async function zipEntries(serverId, paths, { maxBytes = MAX_ZIP_BYTES } = {}) {
+  const items = normalizeSelection(serverId, paths);
+  const tooBig = () =>
+    httpError(413, 'That selection is too large to download as one zip. Download fewer items at a time.');
+  const filesOut = [];
+  const emptyDirs = [];
+  const taken = new Set();
+  let totalBytes = 0;
+
+  const walk = async (abs, name) => {
+    const entries = await fsp.readdir(abs, { withFileTypes: true }).catch(() => []);
+    let any = false;
+    for (const e of entries) {
+      if (e.isSymbolicLink()) continue;
+      const childAbs = path.join(abs, e.name);
+      const childName = `${name}/${e.name}`;
+      if (e.isDirectory()) {
+        any = true;
+        await walk(childAbs, childName);
+      } else if (e.isFile()) {
+        any = true;
+        const st = await fsp.stat(childAbs).catch(() => null);
+        if (!st) continue;
+        totalBytes += st.size;
+        if (totalBytes > maxBytes) throw tooBig();
+        filesOut.push({ abs: childAbs, name: childName });
+      }
+    }
+    if (!any) emptyDirs.push(name);
+  };
+
+  for (const item of items) {
+    const { abs, rel } = resolvePath(serverId, item);
+    guardProtected(serverId, rel);
+    const st = await fsp.lstat(abs).catch(() => null);
+    if (!st) throw httpError(404, 'One of the selected items was not found.');
+    if (st.isSymbolicLink()) continue;
+    // Two selected items can share a base name (a/x.txt and b/x.txt): keep both.
+    const base = path.basename(abs);
+    let name = base;
+    for (let n = 2; taken.has(name); n++) name = `${base} (${n})`;
+    taken.add(name);
+    if (st.isDirectory()) {
+      await walk(abs, name);
+    } else {
+      totalBytes += st.size;
+      if (totalBytes > maxBytes) throw tooBig();
+      filesOut.push({ abs, name });
+    }
+  }
+  if (!filesOut.length && !emptyDirs.length) throw httpError(400, 'There is nothing to download in that selection.');
+  return { files: filesOut, emptyDirs, totalBytes };
 }
 
 /** Move an uploaded tmp file into a target directory (used by the upload routes). */
@@ -502,6 +702,12 @@ module.exports = {
   move,
   copy,
   remove,
+  removeMany,
+  moveMany,
+  copyMany,
+  zipEntries,
+  MAX_BULK_ITEMS,
+  MAX_ZIP_BYTES,
   acceptUpload,
   statFile,
   resolvePath,

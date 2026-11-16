@@ -18,6 +18,12 @@ Under a server's **World** section, the **Files** tab is a full in-browser file 
 
 Text files open in an editor with an 8 MB limit; larger files can be downloaded. Uploads accept up to 20 files at once.
 
+### Selecting several files
+
+Tick the checkbox on any row to select it, or hold Shift and click a second checkbox to select everything in between. The checkbox in the table header selects or clears the whole folder. Once something is selected, an action bar appears with **Delete**, **Move To…**, **Copy To…**, **Download**, **Select All**, and **Clear Selection**. On a phone the bar sits at the bottom of the screen.
+
+Bulk actions report each item separately: if some fail, the panel lists which ones and why. After a delete, the items that failed stay selected so you can try again. **Download** packs a multi-item selection into a single zip (up to 2 GB) without leaving the page. Press Esc to clear the selection.
+
 ### Staying inside the sandbox
 
 Every file operation is confined to the server's own data directory. The panel resolves each path and refuses anything that would escape: `..` traversal, absolute paths, and even symlinks that point outside the directory (including dangling ones that don't exist yet). A mod or plugin can't plant a link to trick the file manager into reading or writing elsewhere on the host.

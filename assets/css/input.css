@@ -305,7 +305,7 @@
 
 @layer components {
   /* ---- Stacking scale (the ONLY z values in the app) ----
-     topbar shell 20 · sidebar backdrop 30 · sidebar 40 · modal 60 · toasts 65
+     topbar shell 20 · bulk action bar 25 · sidebar backdrop 30 · sidebar 40 · modal 60 · toasts 65
      (above modals - errors fired from modal actions must be readable) ·
      dropdown menus 68 (they can open from inside a modal) · tooltip 70.
      Anything new picks a slot here first. ---- */
@@ -649,6 +649,18 @@
   @media (hover: hover) {
     .table-base tbody tr:hover {
       @apply bg-inset/50;
+    }
+  }
+
+  /* Padded wrapper around a row-select checkbox so the click target is bigger
+     than the 16px box; the coarse-pointer floor is applied below. */
+  .msm-select-cell {
+    @apply flex items-center justify-center p-1;
+  }
+  @media (pointer: coarse) {
+    .msm-select-cell {
+      min-height: 2.75rem;
+      min-width: 2.75rem;
     }
   }
 
