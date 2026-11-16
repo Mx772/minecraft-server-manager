@@ -42,11 +42,35 @@ function ensureDataRoot() {
  * A backup restore swaps the world with two renames, parking the original as
  * data/servers/.restore-displaced-<serverId>-<suffix>. If the panel died
  * between the two renames, the server directory is missing and that parked
- * copy is the only world left - put it back. If the server directory exists,
- * the restore finished and the parked copy is leftover debris - remove it.
+ * copy is the only world left - put it back. If the server directory exists
+ * and holds real content, the restore finished and the parked copy is
+ * leftover debris - remove it.
+ *
+ * The "holds real content" guard matters: an EXDEV restore (data/tmp on a
+ * different device) copies the staging dir into the server dir, so a death
+ * mid-copy can leave a partial - even empty - server directory. Treating a
+ * partial directory as "restore finished" would delete the only complete
+ * copy. Only an empty leftover dir is removed before recovering the parked
+ * copy; anything non-empty is assumed complete.
  */
 function recoverDisplacedWorlds() {
   const serversDir = path.join(config.dataDir, 'servers');
+  // A cross-device restore copies into "<serverDir>.restore-tmp-<id>" and only
+  // then renames it into place, so a leftover temp dir means the copy never
+  // finished. Drop it and remember the server: its displaced copy (if any) is
+  // the only complete world, whatever the server dir now looks like.
+  const unfinished = new Set();
+  for (const entry of fs.readdirSync(serversDir)) {
+    const t = /^(.+)\.restore-tmp-.+$/.exec(entry);
+    if (!t) continue;
+    try {
+      fs.rmSync(path.join(serversDir, entry), { recursive: true, force: true });
+      unfinished.add(t[1]);
+      logger.warn('Removed a partial restore copy left behind by an interrupted restore.', { serverId: t[1] });
+    } catch (err) {
+      logger.error('Could not remove a partial restore copy.', { entry, err: err.message });
+    }
+  }
   for (const entry of fs.readdirSync(serversDir)) {
     const m = /^\.restore-displaced-(.+)-[^-]+$/.exec(entry);
     if (!m) continue;
@@ -54,8 +78,21 @@ function recoverDisplacedWorlds() {
     const serverDir = path.join(serversDir, m[1]);
     try {
       if (fs.existsSync(serverDir)) {
-        fs.rmSync(abs, { recursive: true, force: true });
-        logger.info('Removed a leftover displaced-world directory from a completed restore.', { entry });
+        const leftover = !unfinished.has(m[1]) && isCompleteRestore(serverDir);
+        if (leftover) {
+          fs.rmSync(abs, { recursive: true, force: true });
+          logger.info('Removed a leftover displaced-world directory from a completed restore.', { entry });
+        } else {
+          // The restore did not finish (or left nothing behind). Clear the
+          // empty leftover, then recover the parked copy - it is the only
+          // complete world left.
+          fs.rmSync(serverDir, { recursive: true, force: true });
+          fs.renameSync(abs, serverDir);
+          logger.warn(
+            'Recovered a world displaced by a restore that left an empty server directory. The restore did not complete; the pre-restore world is back in place.',
+            { serverId: m[1] }
+          );
+        }
       } else {
         fs.renameSync(abs, serverDir);
         logger.warn(
@@ -66,6 +103,20 @@ function recoverDisplacedWorlds() {
     } catch (err) {
       logger.error('Could not recover or clean a displaced-world directory.', { entry, err: err.message });
     }
+  }
+}
+
+/**
+ * A displaced copy is only safe to delete when the server directory it left
+ * behind is a plausible completed restore. Non-empty is the bar for a plain
+ * rename; the EXDEV copy path stages in a temp sibling (handled by the caller)
+ * so the server dir is never a partial copy.
+ */
+function isCompleteRestore(dir) {
+  try {
+    return fs.readdirSync(dir).length > 0;
+  } catch {
+    return false;
   }
 }
 

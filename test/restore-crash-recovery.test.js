@@ -66,3 +66,39 @@ test('recovery parses a server id that itself contains dashes', () => {
   assert.equal(fs.readFileSync(restored, 'utf8'), 'dashed-id-world');
   fs.rmSync(path.join(serversDir(), serverId), { recursive: true, force: true });
 });
+
+test('boot keeps the displaced world when an interrupted restore left a partial copy', () => {
+  ensureDataRoot();
+  const serverId = 'srv_crashcopy1';
+  const serverDir = path.join(serversDir(), serverId);
+  const displaced = path.join(serversDir(), `.restore-displaced-${serverId}-${Date.now().toString(36)}`);
+  const tmpCopy = path.join(serversDir(), `${serverId}.restore-tmp-abc123`);
+  // Interrupted cross-device restore: the displaced copy is complete, the
+  // temp sibling is a partial copy, and the server dir was never put in place.
+  writeWorld(displaced, 'the-real-world');
+  writeWorld(tmpCopy, 'partial');
+  fs.rmSync(serverDir, { recursive: true, force: true });
+
+  ensureDataRoot();
+
+  assert.equal(fs.existsSync(tmpCopy), false, 'partial copy should be removed');
+  assert.equal(fs.existsSync(displaced), false, 'displaced dir should have been moved back');
+  assert.equal(fs.readFileSync(path.join(serverDir, 'world', 'level.dat'), 'utf8'), 'the-real-world');
+  fs.rmSync(serverDir, { recursive: true, force: true });
+});
+
+test('boot restores the displaced world even if a non-empty server dir sits beside a leftover temp copy', () => {
+  ensureDataRoot();
+  const serverId = 'srv_crashcopy2';
+  const serverDir = path.join(serversDir(), serverId);
+  const displaced = path.join(serversDir(), `.restore-displaced-${serverId}-${Date.now().toString(36)}`);
+  writeWorld(displaced, 'the-real-world');
+  writeWorld(serverDir, 'partial');
+  writeWorld(path.join(serversDir(), `${serverId}.restore-tmp-zzz`), 'partial');
+
+  ensureDataRoot();
+
+  assert.equal(fs.readFileSync(path.join(serverDir, 'world', 'level.dat'), 'utf8'), 'the-real-world');
+  assert.equal(fs.existsSync(displaced), false);
+  fs.rmSync(serverDir, { recursive: true, force: true });
+});

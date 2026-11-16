@@ -16,6 +16,10 @@ const servers = require('../src/services/servers');
 const httpError = require('../src/utils/httpError');
 const { runTaskWithRetry } = require('../src/services/scheduler');
 
+// The redundant-backup check inspects the container; keep it off the real Docker
+// daemon (when one exists, its latency eats the short retry budgets below).
+test.mock.method(backups, 'isScheduledBackupRedundant', async () => false);
+
 // What guardOp throws when the server is busy: a 409 with code BUSY.
 const busyErr = (message) => Object.assign(httpError(409, message), { code: 'BUSY' });
 const busy = () => busyErr('Cannot backup: a backup cleanup operation is already in progress for this server');
@@ -35,8 +39,11 @@ test('a backup refused because the server is busy retries, then runs', async (t)
   t.mock.method(backups, 'createBackup', async () => {
     calls++;
     if (calls < 3) throw busy();
+    return { id: 'bk_test' };
   });
-  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 50 });
+  t.mock.method(backups, 'verifyBackup', async () => {}); // a scheduled backup is read back after it is written
+  // A generous budget: the first run also pays for lazily loaded modules.
+  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 2000 });
   assert.equal(calls, 3);
 });
 
@@ -121,7 +128,9 @@ test("another run finishing does not clear a waiting run's flag", async (t) => {
       waitingNow();
       throw busy(); // run B waits to retry
     }
+    return { id: 'bk_test' };
   });
+  t.mock.method(backups, 'verifyBackup', async () => {});
   const b = fireJob(job, { retryMs: 60, maxWaitMs: 600 });
   await waiting;
   await new Promise((r) => setImmediate(r));

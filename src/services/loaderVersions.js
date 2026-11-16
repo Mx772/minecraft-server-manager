@@ -14,6 +14,7 @@ const path = require('node:path');
 const db = require('../db');
 const logger = require('../logger')(path.basename(__filename));
 const { serializeError } = require('../utils/logSanitize');
+const mojang = require('./mojang');
 
 const TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_BUILDS = 40; // keep the dropdown sane; power users have the advanced env field
@@ -43,7 +44,7 @@ async function cachedJson(cacheKey, url, { headers } = {}) {
       headers: { Accept: 'application/json', ...headers },
       signal: AbortSignal.timeout(10000),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
     const data = await res.json();
     db.run(
       `INSERT INTO api_cache (key, value_json, fetched_at) VALUES (?, ?, datetime('now'))
@@ -126,7 +127,7 @@ const PAPER_CHANNEL_MAP = {
 async function paperBuilds(mc, { channel = 'default' } = {}) {
   const data = await cachedJson(
     `loader:paper3:${mc}`,
-    `https://fill.papermc.io/v3/projects/paper/versions/${mc}/builds`,
+    `https://fill.papermc.io/v3/projects/paper/versions/${encodeURIComponent(mc)}/builds`,
     { headers: { 'User-Agent': 'MinecraftServerManager (self-hosted panel; github.com/anefzaoui)' } }
   );
   const wanted = PAPER_CHANNEL_MAP[channel] || PAPER_CHANNEL_MAP.default;
@@ -162,4 +163,82 @@ async function getBuilds(loader, mc, { channel } = {}) {
   return { loader: key, envKey: envKeyFor(key), builds: [LATEST, ...builds], default: '' };
 }
 
-module.exports = { getBuilds, envKeyFor };
+// Per-MC-version support probe for the plugin family. 'paper' is the loader for
+// every PLUGIN_TYPES flavor (mods.loaderOf collapses them), but the FLAVOR ships
+// the build: probe Paper's Fill list channel-wise, Purpur's own registry by
+// existence, and the other Paper forks by the Paper bellwether (they cannot ship
+// a Minecraft version Paper has not built). A probe that throws (registry down,
+// nothing cached) is treated as supported so a PaperMC outage never invents a
+// false hold; a present cache entry - even an empty one - is authoritative.
+const BELLWETHER_TYPES = new Set(['PUFFERFISH', 'LEAF', 'FOLIA', 'SPIGOT', 'BUKKIT', 'CANYON']);
+
+/**
+ * @returns {Promise<{supported: boolean, heard: boolean}>} `heard` is false only
+ *   when the registry itself could not be reached (no data at all); callers then
+ *   treat the version as supported rather than inventing a hold.
+ */
+async function mcAvailableOnServerType(type, mc, { channel = 'default' } = {}) {
+  try {
+    if (type === 'PAPER' || BELLWETHER_TYPES.has(type)) {
+      const builds = await paperBuilds(mc, { channel });
+      return { supported: builds.length > 0, heard: true };
+    }
+    if (type === 'PURPUR') {
+      const data = await cachedJson(
+        `loader:purpur:${mc}`,
+        `https://api.purpurmc.org/v2/purpur/${encodeURIComponent(mc)}`
+      );
+      const list = data && data.builds && Array.isArray(data.builds.all) ? data.builds.all : [];
+      return { supported: list.length > 0, heard: true };
+    }
+  } catch (err) {
+    // A 404 is the registry answering "no such version": Fill and Purpur both
+    // 404 a Minecraft release they have not built yet, so that is a real hold.
+    if (err && err.status === 404) return { supported: false, heard: true };
+    // registry down: never gate on a guess
+  }
+  return { supported: true, heard: false };
+}
+
+// Single-flight + TTL memo of "the newest Minecraft version this server type
+// actually supports" (mirrors mojang.getVersionManifest's memo + singleFlight).
+// A dashboard render of N LATEST-pinned plugin servers performs one flight and
+// every probe after the first is a hot api_cache read; registry-down resolves
+// null and callers fall back to Mojang's latest.release (current behaviour).
+// Flights are keyed per (type, channel): a concurrent call for a *different*
+// server type must never receive the first caller's answer - e.g. Paper and
+// Purpur resolve against different registries and ship on different schedules.
+let latestMcMemo = null; // { key, mc, atMs }
+const latestMcInFlight = new Map(); // key -> Promise
+
+async function newestMcSupportedByServerType(type, { channel = 'default', maxProbes = 8 } = {}) {
+  const key = `${type}:${channel}`;
+  if (latestMcMemo && latestMcMemo.key === key && Date.now() - latestMcMemo.atMs < TTL_MS) {
+    return latestMcMemo.mc;
+  }
+  if (latestMcInFlight.has(key)) return latestMcInFlight.get(key);
+  latestMcInFlight.set(
+    key,
+    (async () => {
+      const manifest = await mojang.getVersionManifest();
+      let mc = null;
+      let probed = 0;
+      for (const v of manifest.versions) {
+        if (v.type !== 'release') continue;
+        if (probed++ >= maxProbes) break;
+        const ok = await mcAvailableOnServerType(type, v.id, { channel });
+        if (ok.supported) {
+          mc = v.id;
+          break;
+        }
+      }
+      latestMcMemo = { key, mc, atMs: Date.now() };
+      return mc;
+    })().finally(() => {
+      latestMcInFlight.delete(key);
+    })
+  );
+  return latestMcInFlight.get(key);
+}
+
+module.exports = { getBuilds, envKeyFor, mcAvailableOnServerType, newestMcSupportedByServerType };

@@ -21,6 +21,7 @@ function init(serverId) {
   // Server-rendered initial lines show instantly; the WS resends the same tail
   // on connect, so the first 'log' batch replaces them instead of duplicating.
   let clearedInitial = false;
+  const MAX_LINES = 3000;
   log.scrollTop = log.scrollHeight;
 
   // ---- "Announce as" label: attribute panel console commands in game chat ----
@@ -162,10 +163,9 @@ function init(serverId) {
     }
   }
 
-  function appendLine(text) {
-    // A command reply can arrive before any WS log batch (stopped server) -
-    // the full-height placeholder would otherwise push it out of view.
-    log.querySelector('[data-console-empty]')?.remove();
+  // Build one log row. Visibility is applied by the caller so a whole batch
+  // shares one compiled filter.
+  function buildLine(text) {
     const level = classify(text);
     const div = document.createElement('div');
     div.dataset.level = level;
@@ -175,43 +175,71 @@ function init(serverId) {
     if (level === 'WARN') div.className = 'text-gold-300';
     if (level === 'ERROR') div.className = 'text-redstone-400';
     renderAnsi(div, text);
-    applyVisibility(div);
-    log.appendChild(div);
-    while (log.childElementCount > 3000) log.firstElementChild.remove();
+    return div;
+  }
+
+  // Append a batch of lines with one DOM insert, one trim, one scroll, and one
+  // no-match check - a boot backlog is thousands of lines in a single message.
+  function appendLines(texts) {
+    if (!texts.length) return;
+    // A command reply can arrive before any WS log batch (stopped server) -
+    // the full-height placeholder would otherwise push it out of view.
+    log.querySelector('[data-console-empty]')?.remove();
+    const matches = makeMatcher();
+    const frag = document.createDocumentFragment();
+    for (const text of texts) {
+      const div = buildLine(text);
+      applyVisibility(div, matches);
+      frag.appendChild(div);
+    }
+    log.appendChild(frag);
+    let excess = log.childElementCount - MAX_LINES;
+    while (excess-- > 0) log.firstElementChild.remove();
     if (autoScroll) log.scrollTop = log.scrollHeight;
     syncNoMatch();
   }
 
-  function applyVisibility(el) {
+  function appendLine(text) {
+    appendLines([text]);
+  }
+
+  // The filter box compiled once per batch (not once per line): a /regex/ form
+  // is parsed a single time, a plain query is lowercased a single time.
+  function makeMatcher() {
     const q = filterInput ? filterInput.value.trim() : '';
-    let match = true;
-    if (q) {
-      if (q.startsWith('/') && q.endsWith('/') && q.length > 2) {
-        try {
-          match = new RegExp(q.slice(1, -1), 'i').test(el.textContent);
-        } catch {
-          match = true;
-        }
-      } else {
-        match = el.textContent.toLowerCase().includes(q.toLowerCase());
+    if (!q) return () => true;
+    if (q.startsWith('/') && q.endsWith('/') && q.length > 2) {
+      let re = null;
+      try {
+        re = new RegExp(q.slice(1, -1), 'i');
+      } catch {
+        return () => true;
       }
+      return (el) => re.test(el.textContent);
     }
+    const needle = q.toLowerCase();
+    return (el) => el.textContent.toLowerCase().includes(needle);
+  }
+
+  function applyVisibility(el, matches = makeMatcher()) {
     const noisy = hideRconNoise && RCON_NOISE.some((re) => re.test(el.textContent));
-    el.classList.toggle('hidden', !filters[el.dataset.level] || !match || noisy);
+    el.classList.toggle('hidden', !filters[el.dataset.level] || !matches(el) || noisy);
   }
 
   function refilter() {
-    log.querySelectorAll('[data-level]').forEach(applyVisibility);
+    const matches = makeMatcher();
+    log.querySelectorAll('[data-level]').forEach((el) => applyVisibility(el, matches));
     syncNoMatch();
   }
 
   // Filters hiding every line left a silent black box, indistinguishable from
-  // "no output" - say so instead.
+  // "no output" - say so instead. Two early-exit selector lookups, not a scan
+  // of every row.
   function syncNoMatch() {
-    const lines = log.querySelectorAll('[data-level]');
-    const anyVisible = [...lines].some((el) => !el.classList.contains('hidden'));
+    const hasLines = log.querySelector('[data-level]') !== null;
+    const anyVisible = log.querySelector('[data-level]:not(.hidden)') !== null;
     let note = log.querySelector('[data-console-nomatch]');
-    if (lines.length && !anyVisible) {
+    if (hasLines && !anyVisible) {
       if (!note) {
         note = document.createElement('div');
         note.dataset.consoleNomatch = '';
@@ -260,11 +288,11 @@ function init(serverId) {
           log.innerHTML = '';
           disconnectNote = null; // wiped with the rest of the log
         }
-        for (const line of msg.text.split(/\r?\n/)) if (line.trim()) appendLine(line);
+        appendLines(msg.text.split(/\r?\n/).filter((line) => line.trim()));
       } else if (msg.kind === 'cmd-result') {
         ackPending();
         if (msg.error) appendLine(`[panel/ERROR]: ${msg.error}`);
-        else if (msg.output) for (const line of msg.output.split(/\r?\n/)) appendLine(`[rcon]: ${line}`);
+        else if (msg.output) appendLines(msg.output.split(/\r?\n/).map((line) => `[rcon]: ${line}`));
         else appendLine(`[rcon]: (no output) /${msg.command}`);
       } else if (msg.kind === 'error') {
         ackPending();
@@ -368,18 +396,196 @@ function init(serverId) {
     ws.send(JSON.stringify({ kind: 'cmd', command }));
     if (history[history.length - 1] !== command) history.push(command); // no dupes back-to-back
     historyIdx = history.length;
+    closeSuggestions();
+  }
+
+  const suggestionBox = root.querySelector('[data-console-suggestions]');
+  const suggestionList = root.querySelector('[data-console-suggestion-list]');
+  const commandHelp = root.querySelector('[data-console-command-help]');
+  let suggestionTimer = null;
+  let suggestionRequest = 0;
+  let suggestionItems = [];
+  let activeSuggestion = -1;
+
+  function closeSuggestions() {
+    if (!suggestionBox) return;
+    suggestionBox.classList.add('hidden');
+    input?.setAttribute('aria-expanded', 'false');
+    input?.removeAttribute('aria-activedescendant');
+    activeSuggestion = -1;
+  }
+
+  function setActiveSuggestion(index) {
+    if (!suggestionItems.length) return;
+    activeSuggestion = (index + suggestionItems.length) % suggestionItems.length;
+    suggestionList.querySelectorAll('[role="option"]').forEach((option, i) => {
+      option.setAttribute('aria-selected', i === activeSuggestion ? 'true' : 'false');
+      if (i === activeSuggestion) {
+        input?.setAttribute('aria-activedescendant', option.id);
+        option.scrollIntoView({ block: 'nearest' });
+      }
+    });
+    renderCommandHelp(suggestionItems[activeSuggestion]);
+  }
+
+  function renderCommandHelp(item) {
+    if (!commandHelp) return;
+    commandHelp.replaceChildren();
+    const help = item?.help;
+    if (!help) {
+      commandHelp.classList.add('hidden');
+      return;
+    }
+    const description = document.createElement('p');
+    description.className = 'font-medium text-ink';
+    description.textContent = help.description;
+    commandHelp.append(description);
+
+    if (help.usages?.length) {
+      const heading = document.createElement('p');
+      heading.className = 'mt-2 text-ink-faint';
+      heading.textContent = 'Syntax';
+      const usages = document.createElement('div');
+      usages.className = 'mt-1 flex flex-col gap-1';
+      for (const usage of help.usages) {
+        const line = document.createElement('code');
+        line.className = 'text-ink-soft';
+        line.textContent = usage;
+        usages.append(line);
+      }
+      commandHelp.append(heading, usages);
+    }
+    if (help.expected?.length) {
+      const expected = document.createElement('p');
+      expected.className = 'mt-2 text-ink-faint';
+      expected.textContent = `Next: ${help.expected.map((arg) => `${arg.name} (${arg.description})`).join(', ')}`;
+      commandHelp.append(expected);
+    }
+    if (help.catalogVersion) {
+      const source = document.createElement('p');
+      source.className = 'mt-2 text-[11px] text-ink-faint';
+      source.textContent = `Vanilla command catalog for Minecraft ${help.catalogVersion}. Mod and plugin commands are not included.`;
+      commandHelp.append(source);
+    }
+    commandHelp.classList.remove('hidden');
+  }
+
+  function renderSuggestions(data) {
+    if (!suggestionBox || !suggestionList) return;
+    suggestionList.replaceChildren();
+    suggestionItems = (data.suggestions || []).map((item) => ({
+      ...item,
+      help: item.help
+        ? { ...item.help, expected: data.expected }
+        : data.help
+          ? { ...data.help, expected: data.expected }
+          : null,
+    }));
+    for (const [index, item] of suggestionItems.entries()) {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.id = `console-suggestion-${index}`;
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', 'false');
+      option.className =
+        'flex w-full items-center justify-between gap-3 rounded-sm px-3 py-2 text-left text-sm hover:bg-inset aria-selected:bg-inset';
+      const value = document.createElement('span');
+      value.className = 'font-mono text-ink';
+      value.textContent = item.value;
+      const detail = document.createElement('span');
+      detail.className = 'truncate text-xs text-ink-faint';
+      detail.textContent = item.description;
+      option.append(value, detail);
+      option.addEventListener('mouseenter', () => setActiveSuggestion(index));
+      option.addEventListener('mousedown', (event) => event.preventDefault());
+      option.addEventListener('click', () => completeSuggestion(index));
+      suggestionList.append(option);
+    }
+
+    if (suggestionItems.length) setActiveSuggestion(0);
+    else renderCommandHelp(data.help ? { help: { ...data.help, expected: data.expected } } : null);
+
+    const hasHelp = data.help || (data.expected || []).length;
+    if (!suggestionItems.length && !hasHelp) {
+      closeSuggestions();
+      return;
+    }
+    if (data.expected?.length && commandHelp && !data.help) {
+      commandHelp.replaceChildren();
+      const expected = document.createElement('p');
+      expected.className = 'text-ink-faint';
+      expected.textContent = `Expected: ${data.expected.map((arg) => `${arg.name} (${arg.description})`).join(', ')}`;
+      commandHelp.append(expected);
+      commandHelp.classList.remove('hidden');
+    }
+    suggestionBox.classList.remove('hidden');
+    input?.setAttribute('aria-expanded', 'true');
+  }
+
+  function completeSuggestion(index) {
+    const item = suggestionItems[index];
+    if (!item || !input) return;
+    const caret = input.selectionStart ?? input.value.length;
+    const beforeCursor = input.value.slice(0, caret);
+    const leadingSlash = beforeCursor.match(/^\s*\//)?.[0].length || 0;
+    const replaceFrom = Math.min(beforeCursor.length, item.replaceFrom + leadingSlash);
+    const suffix = input.value.slice(caret);
+    const separator = /^\s/.test(suffix) ? '' : ' ';
+    input.value = `${input.value.slice(0, replaceFrom)}${item.value}${separator}${suffix}`;
+    input.setSelectionRange(input.value.length - suffix.length, input.value.length - suffix.length);
+    input.focus();
+    closeSuggestions();
+  }
+
+  async function fetchSuggestions() {
+    if (!input || !input.value.trim()) return closeSuggestions();
+    const caret = input.selectionStart ?? input.value.length;
+    const typed = input.value.slice(0, caret);
+    const request = ++suggestionRequest;
+    try {
+      const res = await fetch(`/api/servers/${serverId}/console-suggestions?input=${encodeURIComponent(typed)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (request !== suggestionRequest || !res.ok || !data.ok) return;
+      data.suggestions = (data.suggestions || []).map((item) => ({ ...item, replaceFrom: data.replaceFrom }));
+      renderSuggestions(data);
+    } catch {
+      if (request === suggestionRequest) closeSuggestions();
+    }
   }
 
   if (input) {
+    input.addEventListener('input', () => {
+      clearTimeout(suggestionTimer);
+      suggestionTimer = setTimeout(fetchSuggestions, 100);
+    });
+    input.addEventListener('blur', () => setTimeout(closeSuggestions, 120));
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && input.value.trim()) {
         send(input.value.trim(), sendBtn);
         input.value = '';
       } else if (e.key === 'ArrowUp') {
-        if (historyIdx > 0) input.value = history[--historyIdx] || '';
-        e.preventDefault();
+        if (!suggestionBox?.classList.contains('hidden') && suggestionItems.length) {
+          setActiveSuggestion(activeSuggestion - 1);
+          e.preventDefault();
+        } else if (historyIdx > 0) {
+          input.value = history[--historyIdx] || '';
+          e.preventDefault();
+        }
       } else if (e.key === 'ArrowDown') {
-        if (historyIdx < history.length) input.value = history[++historyIdx] || '';
+        if (!suggestionBox?.classList.contains('hidden') && suggestionItems.length) {
+          setActiveSuggestion(activeSuggestion + 1);
+          e.preventDefault();
+        } else if (historyIdx < history.length) {
+          input.value = history[++historyIdx] || '';
+          e.preventDefault();
+        }
+      } else if (e.key === 'Tab' && !suggestionBox?.classList.contains('hidden') && suggestionItems.length) {
+        e.preventDefault();
+        completeSuggestion(activeSuggestion < 0 ? 0 : activeSuggestion);
+      } else if (e.key === 'Escape' && !suggestionBox?.classList.contains('hidden')) {
+        closeSuggestions();
         e.preventDefault();
       }
     });
