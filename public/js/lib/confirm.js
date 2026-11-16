@@ -4,6 +4,7 @@
 //   -> Promise<boolean>
 // requireText: the user must type this exact string to enable the confirm
 // button (used for destructive actions like server deletion).
+// notice: optional sentence shown in an info callout under the message.
 
 import { openModal } from './modal.js';
 import { escapeHtml } from './format.js';
@@ -16,6 +17,7 @@ export function confirmDialog({
   cancelLabel = 'Cancel',
   danger = false,
   requireText = null,
+  notice = '',
 } = {}) {
   return new Promise((resolve) => {
     let settled = false;
@@ -38,6 +40,13 @@ export function confirmDialog({
       d.className = 'rounded-md border border-line bg-raised p-2.5 text-xs text-ink-soft';
       d.textContent = detail;
       content.appendChild(d);
+    }
+
+    if (notice) {
+      const n = document.createElement('div');
+      n.className = 'notice notice-info text-xs';
+      n.textContent = notice;
+      content.appendChild(n);
     }
 
     let input = null;

@@ -185,6 +185,17 @@ async function nameTakenByOther(name, serverId) {
   }
 }
 
+/** The container's env as an array of "KEY=value" strings, or null when there is no container. */
+async function containerEnv(serverId) {
+  try {
+    const info = await getContainer(serverId).inspect();
+    return (info.Config && info.Config.Env) || [];
+  } catch (err) {
+    if (err.statusCode === 404) return null;
+    throw err;
+  }
+}
+
 /** Inspect → panel status. Returns { status, health, exitCode, startedAt, pid }. */
 async function inspectStatus(serverId) {
   try {
@@ -542,6 +553,7 @@ module.exports = {
   removeStaleNameConflict,
   nameTakenByOther,
   inspectStatus,
+  containerEnv,
   startContainer,
   stopContainer,
   killContainer,

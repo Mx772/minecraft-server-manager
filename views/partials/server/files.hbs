@@ -22,7 +22,12 @@
         <button class="btn btn-sm" id="files-mkdir">{{{icon 'folder-plus' 'size-3.5'}}} New Folder</button>
       </div>
     </div>
-    {{> files-bulk-bar}}
+    {{! Inside customizations/ the notice below replaces the Add action; files.js reveals it. }}
+    <div id="cust-folder-notice" class="notice notice-info mx-3 mt-3 hidden text-xs">
+      {{{icon 'info' 'size-4 mt-0.5 shrink-0'}}}
+      <div>Files here replace the server's own files at the same path every time the server starts. Remove one to go back to the pack's version.</div>
+    </div>
+    {{> files-bulk-bar customizations=true}}
     <div class="overflow-x-auto">
       <table class="table-base table-stack" id="files-table">
         <thead><tr><th class="w-10"><label class="msm-select-cell"><input type="checkbox" class="msm-check" id="files-select-all" aria-label="Select all"></label></th><th>Name</th><th class="text-right">Size</th><th class="text-right">Modified</th><th class="text-right">Actions</th></tr></thead>
@@ -51,6 +56,9 @@
                     {{{icon 'file-text' 'size-4 shrink-0 text-ink-faint'}}}
                     <span class="min-w-0 truncate font-medium" title="{{name}}">{{name}}</span>
                   {{/if}}
+                  {{#if customized}}
+                    <span class="badge badge-info shrink-0" data-tip="The panel copies your version over the pack's file every time the server starts.">{{#if dir}}Has Customizations{{else}}Customized{{/if}}</span>
+                  {{/if}}
                 </div>
               </td>
               <td data-th="Size" class="whitespace-nowrap text-right text-ink-faint">{{bytes size}}</td>
@@ -67,6 +75,7 @@
                   <button data-file-rename data-path="{{path}}" data-name="{{name}}">{{{icon 'pencil' 'size-3.5'}}} Rename</button>
                   <button data-file-move data-path="{{path}}" data-name="{{name}}">{{{icon 'move' 'size-3.5'}}} Move to…</button>
                   <button data-file-copy data-path="{{path}}" data-name="{{name}}">{{{icon 'copy' 'size-3.5'}}} Copy to…</button>
+                  <button data-file-customize data-path="{{path}}" data-name="{{name}}">{{{icon 'save' 'size-3.5'}}} {{#if customized}}{{#unless dir}}Update Customization{{else}}Add To Customizations{{/unless}}{{else}}Add To Customizations{{/if}}</button>
                 </template>
                 <button class="btn btn-ghost btn-sm text-danger" data-file-delete data-tip="Delete this file ({{bytes size}})." aria-label="Delete {{name}}">{{{icon 'trash-2' 'size-3.5'}}}</button>
               </div></td>

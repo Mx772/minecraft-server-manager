@@ -200,6 +200,36 @@ function init(rootEl) {
     }
   });
 
+  // ---- Customizations (per-server page only) ----
+  // Inside customizations/ itself the Add action makes no sense (those files
+  // are already copies), so swap it for an explanatory notice.
+  const inCustomizations = currentPath === 'customizations' || currentPath.startsWith('customizations/');
+  if (serverId && inCustomizations) {
+    document.getElementById('cust-folder-notice')?.classList.remove('hidden');
+    document.querySelector('[data-bulk="customize"]')?.remove();
+    for (const tpl of document.querySelectorAll('template[id^="file-menu-"]')) {
+      tpl.content.querySelector('[data-file-customize]')?.remove();
+    }
+  }
+
+  async function addToCustomizations(paths) {
+    // post() passes partial failures (ok:false with per-item results) through.
+    const res = await post(`/api/servers/${serverId}/customizations/add`, { paths });
+    if (!res) return null;
+    const files = res.results.reduce((n, x) => n + (x.ok ? Number(x.count) || 1 : 0), 0);
+    if (files) toast(`Added ${plural(files, 'file', 'files')} to customizations.`);
+    if (res.failed) {
+      showFailures(
+        'added',
+        res.results.filter((x) => !x.ok)
+      );
+    }
+    if (res.needsRebuild) {
+      toast('Rebuild the server to start applying your customizations.', { kind: 'warn', timeout: 9000 });
+    }
+    return res;
+  }
+
   // ---- Multi-select and bulk actions ----
   const table = document.getElementById('files-table');
   const bar = document.getElementById('files-bulk-bar');
@@ -390,6 +420,10 @@ function init(rootEl) {
     else if (action === 'move') bulkDestination('Move', rows);
     else if (action === 'copy') bulkDestination('Copy', rows);
     else if (action === 'download') bulkDownload(btn, rows);
+    else if (action === 'customize') {
+      const res = await runBulk(btn, () => addToCustomizations(rows.map((r) => r.dataset.path)));
+      if (res && res.succeeded) reload();
+    }
   });
 
   // Esc clears the selection when focus is inside the bar or the table.
@@ -404,10 +438,14 @@ function init(rootEl) {
   // Rename/move/copy live in the row overflow menu, which dropdown.js portals
   // to <body> - so these are document-delegated and carry their own data-path.
   document.addEventListener('click', (e) => {
-    const act = e.target.closest('[data-file-rename], [data-file-move], [data-file-copy]');
+    const act = e.target.closest('[data-file-rename], [data-file-move], [data-file-copy], [data-file-customize]');
     if (!act || !act.dataset.path) return;
     const { path, name } = act.dataset;
-    if (act.hasAttribute('data-file-rename')) renameModal(path, name);
+    if (act.hasAttribute('data-file-customize')) {
+      addToCustomizations([path]).then((res) => {
+        if (res && res.succeeded) reload();
+      });
+    } else if (act.hasAttribute('data-file-rename')) renameModal(path, name);
     else if (act.hasAttribute('data-file-move')) destinationModal('Move', path, name, `${base}/move`);
     else destinationModal('Copy', path, name, `${base}/copy`);
   });
@@ -481,7 +519,11 @@ function init(rootEl) {
           onClick: async () => {
             const saved = await post(`${base}/write`, { path, content: textarea.value });
             if (!saved) return false;
-            toast(`${name} saved (${fmtBytes(saved.size)}).`);
+            toast(
+              saved.customizationUpdated
+                ? 'Saved. Your customization was updated too.'
+                : `${name} saved (${fmtBytes(saved.size)}).`
+            );
             reload();
           },
         },
@@ -574,6 +616,10 @@ function init(rootEl) {
         body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
+      // Bulk actions answer 200 with ok:false on a PARTIAL failure, plus
+      // per-item results: hand those back so the caller can show what failed
+      // and update the rows that did succeed.
+      if (res.ok && Array.isArray(data.results)) return data;
       if (!res.ok || data.ok === false) {
         toast(data.error || friendlyError(res, { action: 'complete that file action' }), {
           kind: 'error',

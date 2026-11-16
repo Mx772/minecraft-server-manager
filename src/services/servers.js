@@ -134,6 +134,16 @@ function assembleEnv(server) {
   delete env.LOAD_ENV_FROM_GENERIC_PACK;
   delete env.LOAD_ENV_FROM_ARCHIVE;
   delete env.REMOVE_OLD_MODS;
+  // Customizations: the image copies <data>/customizations over the server
+  // folder on EVERY start, after the modpack install (upgrade boot included).
+  // Panel-owned, so a user value can't repoint or weaken it. SKIP_NEWER must be
+  // false: with the default, files a pack upgrade freshly extracted are newer
+  // than the customization copies, so the user's versions would lose on the very
+  // boot that needs them. The sync only overwrites matching files and never
+  // deletes anything else (APPLY_EXTRA_FILES can't overwrite existing files).
+  env.COPY_CONFIG_SRC = '/data/customizations';
+  env.COPY_CONFIG_DEST = '/data';
+  env.SYNC_SKIP_NEWER_IN_DESTINATION = 'false';
   // Docker's port bindings (docker/containers.js GAME_PORT/RCON_PORT) hardcode
   // the CONTAINER-side ports that host ports 25565/25575 forward to. Letting
   // these itzg env vars move the Minecraft process's actual listening port
@@ -375,7 +385,7 @@ async function createServerImpl(input, { actor = 'system', start = false, onProg
   const server = getServer(id);
 
   try {
-    fs.mkdirSync(dataPath('servers', id), { recursive: true });
+    fs.mkdirSync(dataPath('servers', id, 'customizations'), { recursive: true });
     fs.mkdirSync(dataPath('logs', id, 'events'), { recursive: true });
 
     const image = resolveImage(server, { javaTagHint });
@@ -629,6 +639,8 @@ async function recreateServerImpl(id, { actor = 'system', quiet = false } = {}) 
  */
 async function buildContainer(server, ports) {
   const id = server.id;
+  // The image's config sync reads this folder on every start; an empty one is a no-op.
+  fs.mkdirSync(dataPath('servers', id, 'customizations'), { recursive: true });
   const image = resolveImage(server);
   await images.ensureImage(image);
   const containerSpec = {

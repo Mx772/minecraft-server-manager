@@ -4,6 +4,7 @@
 import { toast } from '../lib/toast.js';
 import { friendlyError } from '../lib/errors.js';
 import { confirmDialog } from '../lib/confirm.js';
+import { upgradeNotice } from '../lib/customizations.js';
 import { runTask } from '../lib/progress.js';
 import { openModal } from '../lib/modal.js';
 import { escapeHtml } from '../lib/format.js';
@@ -315,7 +316,9 @@ function initPage() {
     }
 
     if (e.target.closest('[data-pack-upgrade]')) {
+      const notice = await upgradeNotice(serverId);
       const ok = await confirmDialog({
+        notice,
         title: `Upgrade ${packName}?`,
         message: `${serverName} moves from ${current} to ${latest}. The panel takes an automatic backup first, applies the new version, and starts the server back up, watching that it comes back healthy.`,
         detail:
