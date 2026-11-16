@@ -8,6 +8,7 @@ import { openModal } from '../lib/modal.js';
 import { confirmDialog } from '../lib/confirm.js';
 import { setBusy, withBusy } from '../lib/loading.js';
 import { fmtBytes, escapeHtml } from '../lib/format.js';
+import { createSelection } from '../lib/selection.js';
 
 const root = document.querySelector('[data-files-server], [data-files-global]');
 if (root) init(root);
@@ -189,17 +190,7 @@ function init(rootEl) {
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.ok !== false) {
           toast(`"${name}" deleted (${fmtBytes(data.freedBytes)} freed).`);
-          const tbody = row.closest('tbody');
-          row.remove();
-          // A header-only table after the last delete looks broken - restore
-          // the empty state the server renders on first load.
-          if (tbody && !tbody.querySelector('[data-file-row]')) {
-            const tr = document.createElement('tr');
-            tr.dataset.filesEmpty = '';
-            tr.innerHTML =
-              '<td data-th="" colspan="4" class="py-10 text-center text-sm text-ink-faint">This folder is empty. Upload files or create a folder above.</td>';
-            tbody.appendChild(tr);
-          }
+          removeRow(row);
         } else {
           toast(data.error || friendlyError(res, { action: 'delete that item' }), { kind: 'error' });
         }
@@ -207,6 +198,207 @@ function init(rootEl) {
         restore();
       }
     }
+  });
+
+  // ---- Multi-select and bulk actions ----
+  const table = document.getElementById('files-table');
+  const bar = document.getElementById('files-bulk-bar');
+  const countEl = document.getElementById('files-bulk-count');
+  const selection = table
+    ? createSelection({
+        table,
+        rowSelector: '[data-file-row]',
+        checkboxSelector: '[data-file-select]',
+        selectAll: document.getElementById('files-select-all'),
+        onChange: (n) => {
+          if (!bar) return;
+          bar.hidden = n === 0;
+          const spacer = document.getElementById('files-bulk-spacer');
+          if (spacer) spacer.hidden = n === 0;
+          if (countEl) countEl.textContent = `${n} selected`;
+        },
+      })
+    : null;
+
+  // Drop a row from the DOM; a header-only table after the last delete looks
+  // broken, so restore the empty state the server renders on first load.
+  function removeRow(row) {
+    const tbody = row.closest('tbody');
+    if (selection) selection.remove(row);
+    else row.remove();
+    if (tbody && !tbody.querySelector('[data-file-row]') && !tbody.querySelector('[data-files-empty]')) {
+      const tr = document.createElement('tr');
+      tr.dataset.filesEmpty = '';
+      tr.innerHTML =
+        '<td data-th="" colspan="5" class="py-10 text-center text-sm text-ink-faint">This folder is empty. Upload files or create a folder above.</td>';
+      tbody.appendChild(tr);
+    }
+  }
+
+  const baseName = (p) => p.split('/').pop();
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  // Disable every bar button while one action runs; the clicked one spins.
+  async function runBulk(btn, fn) {
+    const buttons = [...bar.querySelectorAll('button')];
+    const was = buttons.map((b) => b.disabled);
+    buttons.forEach((b) => (b.disabled = true));
+    const restore = setBusy(btn);
+    try {
+      return await fn();
+    } finally {
+      restore();
+      buttons.forEach((b, i) => (b.disabled = was[i]));
+    }
+  }
+
+  // Lists which items failed and why; the caller keeps those rows selected.
+  function showFailures(verb, failed, { stillSelected = false } = {}) {
+    const content = document.createElement('div');
+    content.className = 'space-y-2 text-sm';
+    content.innerHTML = `
+      <p>${escapeHtml(plural(failed.length, 'item', 'items'))} could not be ${escapeHtml(verb)}.${stillSelected ? ' They are still selected.' : ''}</p>
+      <ul class="max-h-64 divide-y divide-line overflow-y-auto rounded-md border border-line">
+        ${failed
+          .map(
+            (f) => `<li class="p-2"><span class="font-mono text-xs">${escapeHtml(baseName(f.path))}</span>
+              <span class="block text-xs text-danger">${escapeHtml(f.error || 'Something went wrong.')}</span></li>`
+          )
+          .join('')}
+      </ul>`;
+    openModal({ title: 'Some Items Failed', content, actions: [{ label: 'Close', kind: 'ghost' }] });
+  }
+
+  // Keep only the failed rows selected after a partial failure.
+  function selectOnly(rowsToKeep) {
+    selection.clear();
+    for (const r of rowsToKeep) {
+      const cb = r.querySelector('[data-file-select]');
+      if (cb) cb.checked = true;
+    }
+    selection.refresh();
+  }
+
+  async function bulkDelete(btn, rows) {
+    const dirs = rows.filter((r) => r.dataset.dir === 'true').length;
+    const files = rows.filter((r) => r.dataset.dir !== 'true');
+    const total = files.reduce((n, r) => n + (Number(r.dataset.size) || 0), 0);
+    const parts = [];
+    if (files.length) parts.push(`${fmtBytes(total)} across ${plural(files.length, 'file', 'files')}`);
+    if (dirs) parts.push(`${files.length ? 'plus ' : ''}${plural(dirs, 'folder', 'folders')} and everything inside`);
+    const ok = await confirmDialog({
+      title: `Delete ${plural(rows.length, 'item', 'items')}?`,
+      message: 'This cannot be undone.',
+      detail: `${parts.join(', ')}.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    const res = await runBulk(btn, () => post(`${base}/bulk/delete`, { paths: rows.map((r) => r.dataset.path) }));
+    if (!res) return;
+    const failedPaths = new Set(res.results.filter((x) => !x.ok).map((x) => x.path));
+    for (const r of rows) if (!failedPaths.has(r.dataset.path)) removeRow(r);
+    if (res.succeeded) toast(`Deleted ${plural(res.succeeded, 'item', 'items')}.`);
+    if (res.failed) {
+      showFailures(
+        'deleted',
+        res.results.filter((x) => !x.ok),
+        { stillSelected: true }
+      );
+      selectOnly(rows.filter((r) => failedPaths.has(r.dataset.path)));
+    }
+  }
+
+  function bulkDestination(verb, rows) {
+    const paths = rows.map((r) => r.dataset.path);
+    const url = `${base}/bulk/${verb === 'Copy' ? 'copy' : 'move'}`;
+    destinationModal(verb, null, plural(rows.length, 'item', 'items'), url, {
+      paths,
+      onResult: (res) => {
+        if (res.succeeded) {
+          toast(`${verb === 'Copy' ? 'Copied' : 'Moved'} ${plural(res.succeeded, 'item', 'items')}.`);
+        }
+        if (res.failed) {
+          showFailures(
+            verb === 'Copy' ? 'copied' : 'moved',
+            res.results.filter((x) => !x.ok)
+          );
+        }
+        if (res.succeeded) reload();
+        else return false; // nothing worked: leave the picker open to retry
+      },
+    });
+  }
+
+  // A zip is streamed as an attachment. Posting a form into a hidden iframe
+  // keeps the page in place: a download never fires the iframe's load event,
+  // but a JSON error response does, so we can read it and toast it.
+  function bulkDownload(btn, rows) {
+    if (rows.length === 1 && rows[0].dataset.dir !== 'true') {
+      location.href = `${base}/download?path=${encodeURIComponent(rows[0].dataset.path)}`;
+      return;
+    }
+    const frameName = `files-dl-${Date.now()}`;
+    const iframe = document.createElement('iframe');
+    iframe.name = frameName;
+    iframe.hidden = true;
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.addEventListener('load', () => {
+      let message = '';
+      try {
+        const text = iframe.contentDocument?.body?.textContent || '';
+        if (text) message = JSON.parse(text).error || '';
+      } catch {
+        // Not JSON (or not readable): fall through to the generic message.
+      }
+      // An empty about:blank load can fire on insert; ignore it.
+      if (iframe.contentWindow?.location?.href === 'about:blank') return;
+      toast(message || friendlyError(null, { action: 'prepare that download' }), { kind: 'error', timeout: 9000 });
+      iframe.remove();
+    });
+    document.body.appendChild(iframe);
+    // A successful download never fires `load`, so tidy the frame up later.
+    setTimeout(() => iframe.remove(), 10 * 60 * 1000);
+
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = `${base}/download-zip`;
+    form.target = frameName;
+    form.hidden = true;
+    for (const r of rows) {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'paths';
+      input.value = r.dataset.path;
+      form.appendChild(input);
+    }
+    document.body.appendChild(form);
+    toast('Preparing your download…', { kind: 'info' });
+    form.submit();
+    form.remove();
+  }
+
+  bar?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-bulk]');
+    if (!btn || btn.disabled || !selection) return;
+    const rows = selection.selected();
+    const action = btn.dataset.bulk;
+    if (action === 'clear') return selection.clear();
+    if (action === 'all') return selection.selectAll();
+    if (!rows.length) return;
+    if (action === 'delete') await bulkDelete(btn, rows);
+    else if (action === 'move') bulkDestination('Move', rows);
+    else if (action === 'copy') bulkDestination('Copy', rows);
+    else if (action === 'download') bulkDownload(btn, rows);
+  });
+
+  // Esc clears the selection when focus is inside the bar or the table.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !selection) return;
+    const active = document.activeElement;
+    if (!active || !(bar?.contains(active) || table?.contains(active))) return;
+    if (document.querySelector('[role="dialog"]')) return;
+    selection.clear();
   });
 
   // Rename/move/copy live in the row overflow menu, which dropdown.js portals
@@ -339,12 +531,14 @@ function init(rootEl) {
     input.select();
   }
 
-  function destinationModal(verb, path, name, url) {
+  // `bulk` ({ paths, onResult }) switches to the multi-item form: `name` is then
+  // a count label such as "3 items" and onResult handles the response.
+  function destinationModal(verb, path, name, url, bulk = null) {
     const content = document.createElement('div');
     content.innerHTML = `
       <label class="label">Destination folder (relative to the root)</label>
       <input class="input font-mono" data-dst placeholder="e.g. world/datapacks (leave empty for the root)" autocomplete="off">
-      <p class="help">${verb === 'Copy' ? 'Copies' : 'Moves'} "${escapeHtml(name)}" into the folder. It must already exist.</p>`;
+      <p class="help">${verb === 'Copy' ? 'Copies' : 'Moves'} ${bulk ? escapeHtml(name) : `"${escapeHtml(name)}"`} into the folder. It must already exist.</p>`;
     const input = content.querySelector('[data-dst]');
     input.value = currentPath;
     openModal({
@@ -357,6 +551,10 @@ function init(rootEl) {
           kind: 'primary',
           busyLabel: verb === 'Copy' ? 'Copying…' : 'Moving…',
           onClick: async () => {
+            if (bulk) {
+              const out = await post(url, { paths: bulk.paths, dest: input.value.trim() });
+              return out ? bulk.onResult(out) : false;
+            }
             const res = await post(url, { path, dest: input.value.trim() });
             if (!res) return false;
             toast(`${verb === 'Copy' ? 'Copied' : 'Moved'} to ${res.path}.`);
