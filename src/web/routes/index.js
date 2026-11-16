@@ -593,7 +593,15 @@ router.get(
       } else {
         try {
           const listing = await filesService.list(row.id, rel);
-          context.files = listing.entries;
+          // Flag entries that are (or, for folders, contain) a customization.
+          const customized = await require('../../services/customizations')
+            .customizedPaths(row.id)
+            .catch(() => new Set());
+          const customizedList = [...customized];
+          context.files = listing.entries.map((e) => ({
+            ...e,
+            customized: e.dir ? customizedList.some((p) => p.startsWith(`${e.path}/`)) : customized.has(e.path),
+          }));
           context.filePath = listing.path;
           context.crumbs = listing.path
             ? listing.path.split('/').map((seg, i, a) => ({ name: seg, path: a.slice(0, i + 1).join('/') }))

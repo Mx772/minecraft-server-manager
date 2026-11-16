@@ -188,6 +188,7 @@ const CAPABILITY_INFO = {
     excludes: "The panel-wide data folder (admin-only) and other servers' files.",
     reach: [
       'ALL /api/servers/:id/files/*',
+      'ALL /api/servers/:id/customizations/*',
       'GET /api/servers/:id/logs/archived',
       'GET /api/servers/:id/logs/archived/:file',
       'GET /api/servers/:id/logs/game',
