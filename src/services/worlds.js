@@ -531,23 +531,38 @@ async function installToServerImpl(libraryId, serverId, { mode = 'replace', newN
         const suffix = e.name.endsWith('_the_end') ? '_the_end' : '_nether';
         targets.push({ stage: path.join(tmpDir, e.name), target: dataPath('servers', serverId, targetLevel + suffix) });
       }
+      // Dimension folders the new archive has no counterpart for (a vanilla
+      // layout, or a world without a Nether) must not survive beside the new
+      // overworld, or the result is a mixed world. They are tombstoned too, so
+      // they vanish on success and come back on rollback.
+      const staleTargets = DIM_SUFFIXES.map((suffix) => dataPath('servers', serverId, targetLevel + suffix)).filter(
+        (t) => !targets.some((x) => x.target === t)
+      );
       const tombstones = [];
+      // Every target a new dir was (or may have been, mid-copy) moved into.
+      const touched = [];
+      const tombstone = async (target) => {
+        replacedBytes += await dirSize(target);
+        const tomb = `${target}.old-${Date.now().toString(36)}-${nanoid(4)}`;
+        await fsp.rename(target, tomb);
+        tombstones.push({ tomb, target });
+      };
       try {
         for (const { stage, target } of targets) {
-          if (fs.existsSync(target)) {
-            replacedBytes += await dirSize(target);
-            const tomb = `${target}.old-${Date.now().toString(36)}-${nanoid(4)}`;
-            await fsp.rename(target, tomb);
-            tombstones.push({ tomb, target });
-          }
+          if (fs.existsSync(target)) await tombstone(target);
+          touched.push(target);
           await moveEntry(stage, target);
         }
+        for (const target of staleTargets) {
+          if (fs.existsSync(target)) await tombstone(target);
+        }
       } catch (err) {
-        // Put every displaced dir back - any target already swapped (even
-        // partially, if a cross-device copy was interrupted) is replaced with
-        // its tombstone so the server is exactly as it was before the install.
+        // Remove anything newly moved in (even partially, if a cross-device
+        // copy was interrupted, and including dirs that had no predecessor),
+        // then put every tombstoned dir back so the server is exactly as it
+        // was before the install.
+        for (const target of touched) await fsp.rm(target, { recursive: true, force: true }).catch(() => {});
         for (const { tomb, target } of tombstones) {
-          await fsp.rm(target, { recursive: true, force: true }).catch(() => {});
           await fsp.rename(tomb, target).catch((renameErr) => {
             logger.error(
               'Could not roll a previous world back into place after a failed install; its content is preserved under the .old-* tombstone.',

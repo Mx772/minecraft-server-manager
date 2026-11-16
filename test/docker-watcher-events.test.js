@@ -199,6 +199,23 @@ test('a crash inside a stop window is still recorded, flagged, and not restarted
   assert.deepEqual(started, []);
 });
 
+test('a stop request followed by a start no longer excuses a later out-of-memory kill', async () => {
+  const id = seed({ autoRestart: 0 });
+  stopRequested(id);
+  stopRequested(id, 'started');
+  await watcher.handleEvent(evt(id, 'die', { exitCode: '137' }));
+  assert.equal(status(id), 'crashed');
+  assert.equal(events(id, 'crashed').length, 1);
+});
+
+test('a SIGKILL after a stop request with no start since is an intended stop', async () => {
+  const id = seed({ autoRestart: 0 });
+  stopRequested(id);
+  await watcher.handleEvent(evt(id, 'die', { exitCode: '137' }));
+  assert.equal(status(id), 'stopped');
+  assert.equal(events(id, 'crashed').length, 0);
+});
+
 test('a diagnosed config error is reported with the fix and never auto-restarted', async () => {
   const id = seed();
   logText = 'You need to agree to the EULA in order to run the server.';

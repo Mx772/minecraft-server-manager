@@ -55,6 +55,22 @@ function ensureDataRoot() {
  */
 function recoverDisplacedWorlds() {
   const serversDir = path.join(config.dataDir, 'servers');
+  // A cross-device restore copies into "<serverDir>.restore-tmp-<id>" and only
+  // then renames it into place, so a leftover temp dir means the copy never
+  // finished. Drop it and remember the server: its displaced copy (if any) is
+  // the only complete world, whatever the server dir now looks like.
+  const unfinished = new Set();
+  for (const entry of fs.readdirSync(serversDir)) {
+    const t = /^(.+)\.restore-tmp-.+$/.exec(entry);
+    if (!t) continue;
+    try {
+      fs.rmSync(path.join(serversDir, entry), { recursive: true, force: true });
+      unfinished.add(t[1]);
+      logger.warn('Removed a partial restore copy left behind by an interrupted restore.', { serverId: t[1] });
+    } catch (err) {
+      logger.error('Could not remove a partial restore copy.', { entry, err: err.message });
+    }
+  }
   for (const entry of fs.readdirSync(serversDir)) {
     const m = /^\.restore-displaced-(.+)-[^-]+$/.exec(entry);
     if (!m) continue;
@@ -62,7 +78,7 @@ function recoverDisplacedWorlds() {
     const serverDir = path.join(serversDir, m[1]);
     try {
       if (fs.existsSync(serverDir)) {
-        const leftover = isCompleteRestore(serverDir);
+        const leftover = !unfinished.has(m[1]) && isCompleteRestore(serverDir);
         if (leftover) {
           fs.rmSync(abs, { recursive: true, force: true });
           logger.info('Removed a leftover displaced-world directory from a completed restore.', { entry });
@@ -92,9 +108,9 @@ function recoverDisplacedWorlds() {
 
 /**
  * A displaced copy is only safe to delete when the server directory it left
- * behind is a plausible completed restore. Non-empty is the bar - an EXDEV
- * copy that died before writing anything leaves an empty shell, which must
- * not count as a finished restore.
+ * behind is a plausible completed restore. Non-empty is the bar for a plain
+ * rename; the EXDEV copy path stages in a temp sibling (handled by the caller)
+ * so the server dir is never a partial copy.
  */
 function isCompleteRestore(dir) {
   try {

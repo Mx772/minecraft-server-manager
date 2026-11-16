@@ -101,8 +101,19 @@ test('still skips when only non-data events happened since the backup', async ()
   seedBackup('2026-01-02 00:00:00');
   seedEvent('schedule-fired', '2026-01-03 00:00:00');
   seedEvent('update-check', '2026-01-03 00:00:00');
+  seedEvent('backup-verified', '2026-01-03 00:00:00');
+  seedEvent('backup-verify-failed', '2026-01-03 00:00:00');
   info = stopped('2026-01-01T12:00:00Z');
   assert.equal(await isScheduledBackupRedundant('srv_r'), true);
+});
+
+test('a backup verification after the latest backup does not block the skip', async () => {
+  seedBackup('2026-01-02 00:00:00');
+  seedEvent('backup-verified', '2026-01-02 06:00:00');
+  info = stopped('2026-01-01T12:00:00Z');
+  assert.equal(await isScheduledBackupRedundant('srv_r'), true);
+  seedEvent('file-written', '2026-01-02 07:00:00');
+  assert.equal(await isScheduledBackupRedundant('srv_r'), false);
 });
 
 test('a change before the backup does not block the skip', async () => {

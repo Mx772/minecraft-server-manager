@@ -499,6 +499,7 @@ async function installOverlayItem(entry, server, tmpDir, { actor }) {
       lib.version || entry.version,
       lib.icon_url || null
     );
+    require('../updates/checker').invalidateOutdatedCache();
     return { name: entry.name, status: 'ok' };
   } catch (err) {
     return { name: entry.name, status: 'failed', error: err.message };

@@ -824,7 +824,18 @@ async function renameDir(from, to) {
     await fsp.rename(from, to);
   } catch (err) {
     if (err.code !== 'EXDEV') throw err;
-    await fsp.cp(from, to, { recursive: true });
+    // Copy into a sibling of the destination, then rename into place: the
+    // rename is same-filesystem and atomic, so `to` is either absent or
+    // complete, never a partial copy. Boot recovery relies on that (and
+    // treats a leftover `.restore-tmp-*` as an unfinished restore).
+    const tmp = `${to}.restore-tmp-${nanoid(6)}`;
+    try {
+      await fsp.cp(from, tmp, { recursive: true });
+      await fsp.rename(tmp, to);
+    } catch (copyErr) {
+      await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+      throw copyErr;
+    }
     await fsp.rm(from, { recursive: true, force: true });
   }
 }

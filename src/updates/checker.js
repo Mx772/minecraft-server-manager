@@ -598,7 +598,7 @@ function invalidateOutdatedCache() {
 }
 function countOutdatedByKind({ serverIds = null } = {}) {
   const scopeKey = serverIds ? [...serverIds].sort().join('|') : '';
-  if (outdatedCache !== null && outdatedCacheKey === scopeKey) return outdatedCache;
+  if (outdatedCache !== null && outdatedCacheKey === scopeKey) return { ...outdatedCache };
   const ids = serverIds ? [...serverIds] : null;
   // Same predicate for everyone; the visibility scope is one extra clause.
   const scope = ids ? ` AND s.id IN (${ids.length ? ids.map(() => '?').join(',') : 'NULL'})` : '';
@@ -655,7 +655,7 @@ function countOutdatedByKind({ serverIds = null } = {}) {
     // Server-level rebuilds: the container image or the Minecraft/loader version.
     server: images + mc + loader,
   };
-  return outdatedCache;
+  return { ...outdatedCache };
 }
 
 /** @param {{ serverIds?: Iterable<string> | null }} [opts] see countOutdatedByKind */

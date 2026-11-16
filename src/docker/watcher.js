@@ -21,6 +21,29 @@ const CRASH_WINDOW_MINUTES = 10;
 // 137 during a stop must never read as an unrequested crash).
 const STOP_REQUESTED_WINDOW_MINUTES = 10;
 
+/**
+ * Whether a stop/restart/kill was requested within the window and no start was
+ * recorded after it. A start means the current run began after the request, so
+ * a later death (say, an out-of-memory kill minutes into the run) is a crash,
+ * not part of that earlier stop.
+ * @param {string} serverId
+ */
+function hasPendingStopRequest(serverId) {
+  return Boolean(
+    db.get(
+      `SELECT 1 AS x FROM events s
+        WHERE s.server_id = ? AND s.type IN ('stop-requested','restart-requested','kill-requested')
+          AND s.created_at > datetime('now', ?)
+          AND NOT EXISTS (
+            SELECT 1 FROM events t
+             WHERE t.server_id = s.server_id AND t.type IN ('started','restarted') AND t.id > s.id
+          )`,
+      serverId,
+      `-${STOP_REQUESTED_WINDOW_MINUTES} minutes`
+    )
+  );
+}
+
 // Docker streams one event per line and lines are complete frames, but a whole
 // line must still be buffered before it can be parsed. Defense-in-depth cap: a
 // stream that never delivers a newline (e.g. a daemon wedged mid-write) must
@@ -121,11 +144,7 @@ async function handleEvent(evt) {
     // A graceful stop of a slow-saving world keeps status 'running' while
     // mc-health probes fail, so skip the flip/alert if a stop/restart/kill was
     // just requested (same window the die handler below uses).
-    const stopRequested = db.get(
-      "SELECT 1 AS x FROM events WHERE server_id = ? AND type IN ('stop-requested','restart-requested','kill-requested') AND created_at > datetime('now', ?)",
-      serverId,
-      `-${STOP_REQUESTED_WINDOW_MINUTES} minutes`
-    );
+    const stopRequested = hasPendingStopRequest(serverId);
     if (!stopRequested && ['running', 'starting', 'stalled'].includes(server.status)) {
       db.run("UPDATE servers SET status = 'unhealthy' WHERE id = ?", serverId);
       const already = db.get(
@@ -160,11 +179,7 @@ async function handleEvent(evt) {
   if (eventStatus !== 'die') return;
 
   const exitCode = Number(evt.Actor.Attributes.exitCode ?? -1);
-  const stopRequested = db.get(
-    "SELECT 1 AS x FROM events WHERE server_id = ? AND type IN ('stop-requested','restart-requested','kill-requested') AND created_at > datetime('now', ?)",
-    serverId,
-    `-${STOP_REQUESTED_WINDOW_MINUTES} minutes`
-  );
+  const stopRequested = hasPendingStopRequest(serverId);
   // Clean exits are judged by the exit code, not just the request window:
   // 0 = normal, 143 = SIGTERM (docker stop), 130 = SIGINT - all intentional.
   // A clean exit the panel did not ask for (an in-game `/stop`, a console

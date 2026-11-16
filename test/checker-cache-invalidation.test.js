@@ -135,3 +135,31 @@ test('applyPack invalidates the outdated-count cache', async (t) => {
   );
   assert.ok(invalidate.mock.calls.length > callsBefore, 'applyPack must invalidate the cache');
 });
+
+test('countOutdatedByKind reflects content removal and hands out copies', async () => {
+  const mods = require('../src/services/mods');
+  const id = seedFabricServer('srv_cache_rm');
+  const lib = seedLibraryFile({ id: 'lib_cache_rm', filename: 'rmmod-1.0.jar', version: '1.0' });
+  fs.copyFileSync(dataPath(lib.rel_path), dataPath('servers', id, 'mods', lib.filename));
+  db.run(
+    `INSERT INTO server_content (id, server_id, library_id, kind, managed_by, name, filename, version)
+     VALUES ('sc_cache_rm', ?, ?, 'mod', 'overlay', 'Rm Mod', ?, '1.0')`,
+    id,
+    lib.id,
+    lib.filename
+  );
+  db.run(
+    `INSERT INTO update_checks (subject_type, subject_id, current_version, latest_version, latest_name, checked_at)
+     VALUES ('content', 'sc_cache_rm', '1.0', 'ver_2', '2.0', datetime('now'))`
+  );
+  checker.invalidateOutdatedCache();
+  const before = checker.countOutdatedByKind({ serverIds: [id] });
+  assert.equal(before.mods, 1);
+
+  // Mutating the returned object must not corrupt the cache.
+  before.mods = 99;
+  assert.equal(checker.countOutdatedByKind({ serverIds: [id] }).mods, 1);
+
+  await mods.removeContent(id, lib.filename, { actor: 'test' });
+  assert.equal(checker.countOutdatedByKind({ serverIds: [id] }).mods, 0);
+});

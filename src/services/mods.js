@@ -90,6 +90,7 @@ function healOverlayRow(serverId, lib, filename, kind) {
       lib.version || null,
       lib.icon_url || null
     );
+    require('../updates/checker').invalidateOutdatedCache();
   } catch (err) {
     logger.debug('Could not heal an orphaned overlay row.', {
       serverId,
@@ -809,6 +810,7 @@ async function installResolved(
     lib.version,
     lib.icon_url
   );
+  require('../updates/checker').invalidateOutdatedCache();
   // ignoreVersion is only ever set by the single-URL install path; bulk zip
   // imports call this without it, so their override flags stay false.
   // meta.mcVersions/meta.loaders are only set for modrinth sources (curseforge
@@ -923,7 +925,10 @@ async function removeContent(serverId, file, { actor = 'system' } = {}) {
       await fsp.rm(abs);
     }
   }
-  if (row) db.run('DELETE FROM server_content WHERE id = ?', row.id);
+  if (row) {
+    db.run('DELETE FROM server_content WHERE id = ?', row.id);
+    require('../updates/checker').invalidateOutdatedCache();
+  }
   recordEvent({
     serverId,
     actor,
@@ -1334,6 +1339,7 @@ async function installLocalContent(
     lib.version,
     lib.icon_url
   );
+  require('../updates/checker').invalidateOutdatedCache();
   if (excludeToken) excludePackMod(serverId, excludeToken, { actor });
   recordEvent({
     serverId,

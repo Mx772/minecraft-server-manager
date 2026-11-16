@@ -7,6 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fsp = require('node:fs/promises');
 const zlib = require('node:zlib');
 const tar = require('tar');
 const { migrate } = require('../src/db/migrate');
@@ -245,4 +246,48 @@ test('importArchive handles zip and tar.gz, and rejects junk', async () => {
   fs.writeFileSync(path.join(src, 'x', 'readme.txt'), 'hi');
   await tar.c({ file: empty, cwd: src }, ['x']);
   await assert.rejects(worlds.importArchive(empty, { originalName: 'empty.tar' }), /No level\.dat/);
+});
+
+test('replace install removes dimension folders the new archive lacks, and rolls back cleanly', async () => {
+  const src = mkServer('srv_wlr1');
+  const dst = mkServer('srv_wlr2');
+  mkWorld(src, 'world'); // overworld only, no Nether/End
+  const row = await worlds.extractFromServer(src, { name: 'Flat' });
+
+  mkWorld(dst, 'world', { dims: true });
+  const nether = dataPath('servers', dst, 'world_nether');
+  const end = dataPath('servers', dst, 'world_the_end');
+  fs.writeFileSync(path.join(nether, 'marker.txt'), 'old-nether');
+
+  // Failure mid-swap: the old dims come back and the new overworld is removed.
+  fs.writeFileSync(path.join(dataPath('servers', dst, 'world'), 'old.txt'), 'old-world');
+  const realRename = fsp.rename;
+  fsp.rename = async (from, to) => {
+    // Fail while tombstoning the stale End, after the new overworld is in place
+    // and the stale Nether is already parked.
+    if (String(from) === end) throw new Error('boom');
+    return realRename(from, to);
+  };
+  try {
+    await assert.rejects(worlds.installToServer(row.id, dst), /boom/);
+  } finally {
+    fsp.rename = realRename;
+  }
+  assert.equal(fs.readFileSync(path.join(nether, 'marker.txt'), 'utf8'), 'old-nether');
+  assert.ok(fs.existsSync(end));
+  assert.equal(fs.readFileSync(path.join(dataPath('servers', dst, 'world'), 'old.txt'), 'utf8'), 'old-world');
+  assert.deepEqual(
+    fs.readdirSync(dataPath('servers', dst)).filter((n) => n.includes('.old-')),
+    []
+  );
+
+  // Success: stale Nether/End are gone, no tombstones remain.
+  await worlds.installToServer(row.id, dst);
+  assert.equal(fs.existsSync(nether), false);
+  assert.equal(fs.existsSync(end), false);
+  assert.ok(fs.existsSync(path.join(dataPath('servers', dst, 'world'), 'level.dat')));
+  assert.deepEqual(
+    fs.readdirSync(dataPath('servers', dst)).filter((n) => n.includes('.old-')),
+    []
+  );
 });

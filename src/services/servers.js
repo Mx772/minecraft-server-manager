@@ -398,6 +398,7 @@ async function createServerImpl(input, { actor = 'system', start = false, onProg
       extraBinds: server.extraBinds,
     });
     db.run('UPDATE servers SET container_id = ? WHERE id = ?', containerId, id);
+    require('../updates/checker').invalidateOutdatedCache();
   } catch (err) {
     // Roll back: remove any partial container, drop the row (frees its ports),
     // and delete the freshly-made data/log dirs. Then surface the original error.
@@ -664,6 +665,7 @@ async function buildContainer(server, ports) {
     containerId = await containers.createContainer(containerSpec);
   }
   db.run('UPDATE servers SET container_id = ? WHERE id = ?', containerId, id);
+  require('../updates/checker').invalidateOutdatedCache();
 }
 
 /**
@@ -894,6 +896,8 @@ function updateServer(id, changes, { actor = 'system' } = {}) {
   if (!sets.length) return { server: before, needsRecreate: false };
   if (needsRecreate) sets.push('pending_recreate = 1');
   db.run(`UPDATE servers SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
+  // update_policy / mc_version feed the outdated-count query.
+  require('../updates/checker').invalidateOutdatedCache();
   recordEvent({
     serverId: id,
     actor,
