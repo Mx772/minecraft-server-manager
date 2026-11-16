@@ -133,6 +133,10 @@ test('a non-zero exit inside a stop/restart window is still recorded as a crash 
   assert.equal(JSON.parse(crash.details_json).duringStopWindow, true);
 });
 
+// The busy-retry tests below give restartAfterCrash a generous maxWaitMs: each
+// one expects a specific early return (or success), never the give-up path, and
+// a tight budget made them fail on a slow CI runner before that return was
+// reached. Only the "gives up" test further down should use a tiny budget.
 test('a crash restart that finds the server busy retries instead of leaving it down', async (t) => {
   inspectResult = { exists: true, status: 'crashed' }; // the watcher reads this file's inspectStatus stub
   let calls = 0;
@@ -146,7 +150,7 @@ test('a crash restart that finds the server busy retries instead of leaving it d
     }
   });
   seedServer('srv_busy1', 1);
-  const started = await watcher.restartAfterCrash('srv_busy1', 1, { retryMs: 1, maxWaitMs: 50 });
+  const started = await watcher.restartAfterCrash('srv_busy1', 1, { retryMs: 1, maxWaitMs: 10_000 });
   assert.equal(started, true);
   assert.equal(calls, 3);
 });
@@ -161,7 +165,7 @@ test('a crash restart stops retrying once someone else started the server', asyn
     });
   });
   seedServer('srv_busy2', 1);
-  assert.equal(await watcher.restartAfterCrash('srv_busy2', 1, { retryMs: 1, maxWaitMs: 50 }), false);
+  assert.equal(await watcher.restartAfterCrash('srv_busy2', 1, { retryMs: 1, maxWaitMs: 10_000 }), false);
   assert.equal(spy.mock.callCount(), 1);
 });
 
@@ -175,7 +179,7 @@ test('a crash restart waiting on a busy server stops if auto-restart is turned o
       code: 'BUSY',
     });
   });
-  assert.equal(await watcher.restartAfterCrash('srv_busy3', 1, { retryMs: 1, maxWaitMs: 50 }), false);
+  assert.equal(await watcher.restartAfterCrash('srv_busy3', 1, { retryMs: 1, maxWaitMs: 10_000 }), false);
   assert.equal(spy.mock.callCount(), 1);
 });
 
@@ -189,7 +193,7 @@ test('a crash restart waiting on a busy server stops if someone stops the server
       code: 'BUSY',
     });
   });
-  assert.equal(await watcher.restartAfterCrash('srv_busy4', 1, { retryMs: 1, maxWaitMs: 50 }), false);
+  assert.equal(await watcher.restartAfterCrash('srv_busy4', 1, { retryMs: 1, maxWaitMs: 10_000 }), false);
   assert.equal(spy.mock.callCount(), 1);
 });
 

@@ -49,8 +49,13 @@ test:watch` re-runs the suite on every save.
 only when the `checks` job (lint, format, typecheck, build), the `tests` job, and the PR-only
 `docker-build` job all pass. The PR branch must be up to date with `main`, and direct pushes, force
 pushes and deletion are blocked for everyone including admins. Every change (releases too) lands
-through a PR. The same workflow publishes the `:latest` image and the GitHub Release on a push to
-`main`, and those jobs only run after the gates pass, so an untested commit can never ship.
+through a PR. The same workflow publishes the `:edge` and `:sha-<commit>` images on every push to
+`main`, and the `:latest` and `:v<version>` images plus the GitHub Release when a `v<version>` tag
+is pushed. Those jobs only run after the gates pass, so an untested commit can never ship.
+
+To cut a release, bump `package.json` and `CHANGELOG.md` in a PR, merge it, then tag the merge
+commit: `git tag v<version> <commit> && git push origin v<version>`. The run fails before
+publishing anything if the tag doesn't match `package.json`.
 
 Keep changes focused and match the surrounding style (Prettier enforces it). Server code is **plain
 CommonJS JS, with no TypeScript compile step**. The browser code in `public/js/` is ESM, bundled and
