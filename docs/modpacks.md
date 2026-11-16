@@ -31,3 +31,18 @@ Each server has an **Update Policy** card on its **Settings → Configuration** 
 ## Upgrading a pack
 
 From a pinned server you can upgrade to a newer version in one action. The panel takes a backup first, swaps the pinned version, rebuilds the server (re-resolving Java if the new version needs a different runtime), and monitors the first boot, with a generous window for large packs like GTNH that download a couple of gigabytes and build a several-hundred-mod world on first start.
+
+## Keeping your changes across pack updates
+
+A pack update can overwrite the configs and scripts the pack ships. To keep your own version of a file, add it to the server's **customizations**:
+
+1. Open the server's **Files** tab.
+2. Use a row's overflow menu and choose **Add To Customizations** (or **Update Customization** if the file is already customized). To add several at once, select them and use **Add To Customizations** in the bar that appears. Adding a folder adds every file inside it.
+
+The panel keeps a copy of each file in a `customizations/` folder in the server's data folder, and copies that folder back over the server's files **every time the server starts**. Your version wins over the pack's, including after a pack upgrade. If the server was already running when you added a file, rebuild it to start applying the copy.
+
+- **The badge:** files with a copy show a **Customized** badge in the Files tab, and folders that contain one show **Has Customizations**.
+- **The Modpacks card:** the **Customizations** card on the server's **Mods** tab lists every customized file, with a status of **Applied** or **Applies At Next Start**, when it was captured and from which pack version. **Open** jumps to the file's folder in Files.
+- **Removing one:** choose **Remove** on the card, or delete the file from inside the `customizations/` folder. Only your copy is deleted, and the pack's version comes back at the next pack update.
+- **Upgrades:** when a server has customizations, the pack upgrade confirmation tells you how many files will be copied back over the new version.
+- **Backups:** backups include the `customizations/` folder, so restoring a backup restores your changes too.

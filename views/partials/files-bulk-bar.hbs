@@ -7,6 +7,7 @@
   <button type="button" class="btn btn-sm" data-bulk="move">{{{icon 'move' 'size-3.5'}}} Move To…</button>
   <button type="button" class="btn btn-sm" data-bulk="copy">{{{icon 'copy' 'size-3.5'}}} Copy To…</button>
   <button type="button" class="btn btn-sm" data-bulk="download">{{{icon 'download' 'size-3.5'}}} Download</button>
+  {{#if customizations}}<button type="button" class="btn btn-sm" data-bulk="customize" data-tip="Keep these files across pack updates.">{{{icon 'save' 'size-3.5'}}} Add To Customizations</button>{{/if}}
   <button type="button" class="btn btn-sm btn-ghost" data-bulk="all">Select All</button>
   <button type="button" class="btn btn-sm btn-ghost" data-bulk="clear">Clear Selection</button>
 </div>
