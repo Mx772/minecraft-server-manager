@@ -155,7 +155,7 @@ async function exportBlueprint(serverId, options = {}, { actor = 'system' } = {}
     serverId
   );
 
-  const configFiles = includeConfig ? collectConfigFiles(serverDir) : [];
+  const configFiles = includeConfig ? collectConfigFiles(serverDir, server.id) : [];
   const worldDirs = includeWorld ? worldDirsOf(server, serverDir) : [];
   if (includeWorld && worldDirs.length) {
     let needed = 0;
@@ -828,8 +828,12 @@ function sanitizeEnv(env) {
   return Object.fromEntries(Object.entries(env || {}).filter(([k]) => !SECRET_ENV_RE.test(k)));
 }
 
-function collectConfigFiles(serverDir) {
+// serverId is optional: files owned by a panel feature (the Discord chat bridge's
+// config, whose live copy holds the real bot token) are never exported.
+function collectConfigFiles(serverDir, serverId) {
   const rels = [];
+  const owned = new Set(require('../config/chat-bridges').BRIDGES.map((b) => b.configPath));
+  if (serverId) for (const p of require('../services/customizations').ownedPaths(serverId)) owned.add(p);
   if (fs.existsSync(path.join(serverDir, 'server.properties'))) rels.push('server.properties');
   const walk = (abs, rel) => {
     let entries;
@@ -841,7 +845,7 @@ function collectConfigFiles(serverDir) {
     for (const entry of entries) {
       const childRel = `${rel}/${entry.name}`;
       if (entry.isDirectory()) walk(path.join(abs, entry.name), childRel);
-      else if (entry.isFile()) rels.push(childRel);
+      else if (entry.isFile() && !owned.has(childRel)) rels.push(childRel);
     }
   };
   if (fs.existsSync(path.join(serverDir, 'config'))) walk(path.join(serverDir, 'config'), 'config');
