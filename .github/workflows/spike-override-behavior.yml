@@ -1,0 +1,29 @@
+name: Spike override behavior
+
+on:
+  push:
+    branches: [spike/override-behavior]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build fake packs
+        run: spike/override-behavior/make-packs.sh "$RUNNER_TEMP/packs"
+      - name: Run scenarios
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+        run: spike/override-behavior/run.sh "$RUNNER_TEMP/packs" "$RUNNER_TEMP/out"
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: override-behavior-results
+          path: ${{ runner.temp }}/out
+          if-no-files-found: warn
