@@ -107,8 +107,17 @@ by host path).
 
 ### 🐳 Option 1: Docker (Linux hosts, Portainer, Dockge, compose)
 
-A pre-built multi-arch image (amd64 + arm64) is published to GHCR on every release:
-`ghcr.io/anefzaoui/minecraft-server-manager:latest` (or pin a version tag, e.g. `:v0.14.1`).
+A pre-built multi-arch image (amd64 + arm64) is published to GHCR on two channels:
+
+| Tag                            | Moves when                     | Use it for                                                |
+| ------------------------------ | ------------------------------ | --------------------------------------------------------- |
+| `:latest`                      | A release is tagged.           | Most installs.                                            |
+| `:v<version>`, e.g. `:v0.14.1` | Never (one per release).       | Pinning a release.                                        |
+| `:edge`                        | Every change merged to `main`. | Trying fixes before the next release. Expect rough edges. |
+| `:sha-<commit>`                | Never (one per merge).         | Pinning one exact `main` build.                           |
+
+For example `ghcr.io/mx772/minecraft-server-manager:edge`. Back up the data folder before moving
+between channels: an `:edge` build can run database migrations that an older release doesn't know.
 
 On a fresh Linux server, the installer does the whole thing: installs Docker if it's missing, writes
 `/opt/msm`, starts the panel, and waits until it answers.
