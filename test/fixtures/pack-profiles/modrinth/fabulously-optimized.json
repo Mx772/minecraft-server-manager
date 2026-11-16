@@ -1,0 +1,21 @@
+{
+  "id": "modrinth/fabulously-optimized",
+  "platform": "modrinth",
+  "slug": "fabulously-optimized",
+  "projectId": "1KVo5zza",
+  "name": "Fabulously Optimized",
+  "presets": [
+    {
+      "id": "flight",
+      "title": "Allow Flight",
+      "description": "Lets players use flight mods.",
+      "default": true,
+      "patches": [
+        {
+          "file": "config/server.properties",
+          "ops": [{ "op": "set", "path": ["allow-flight"], "value": "true" }]
+        }
+      ]
+    }
+  ]
+}

@@ -54,6 +54,8 @@ async function upgradePack(
     recreating: 'Recreating container…',
     monitoring: 'Waiting for the server to come up…',
     overlay: 'Restoring custom mod overlay…',
+    profile: 'Applying recommended settings…',
+    'profile-restart': 'Restarting to apply recommended settings…',
   };
   const step = (s) => {
     activeUpgrades.set(serverId, { step: s, startedAt: activeUpgrades.get(serverId)?.startedAt || Date.now() });
@@ -166,6 +168,8 @@ async function upgradePack(
     step('overlay');
     await packsService.afterPackOperation(serverId, { actor });
 
+    await applyProfileAfterUpgrade(serverId, { actor, step });
+
     recordEvent({
       serverId,
       actor,
@@ -184,6 +188,28 @@ async function upgradePack(
     return { ok: true, from: pack.pinned_version_name, to: resolved.versionName, backupId };
   } finally {
     activeUpgrades.delete(serverId);
+  }
+}
+
+/**
+ * Re-apply the pack profile once the upgraded server is healthy (files the new
+ * version generates on first boot), and restart once if that changed any. The
+ * upgrade has already succeeded, so a failure here is logged, never thrown.
+ */
+async function applyProfileAfterUpgrade(serverId, { actor, step }) {
+  try {
+    const profiles = require('../services/packProfiles');
+    step('profile');
+    const out = await profiles.apply(serverId, { trigger: 'post-upgrade', actor });
+    if (out.changedFiles.length > 0) {
+      step('profile-restart');
+      await retryWhileBusy(() => profiles.restartOnce(serverId, { actor }));
+    }
+  } catch (err) {
+    logger.warn('Applying pack profile settings after an upgrade failed.', {
+      serverId,
+      err: serializeError(err, { includeStack: false }),
+    });
   }
 }
 
@@ -351,4 +377,4 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms).unref());
 }
 
-module.exports = { upgradePack, rollbackPack, upgradeStatus, runAutoUpgrades };
+module.exports = { upgradePack, rollbackPack, upgradeStatus, runAutoUpgrades, applyProfileAfterUpgrade };

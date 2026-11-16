@@ -67,6 +67,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
 COPY --from=build /app/public ./public
 COPY views ./views
 COPY scripts ./scripts
+COPY pack-profiles ./pack-profiles
 COPY src ./src
 EXPOSE 25564
 VOLUME /data

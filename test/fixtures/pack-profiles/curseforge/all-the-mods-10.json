@@ -1,0 +1,41 @@
+{
+  "id": "curseforge/all-the-mods-10",
+  "platform": "curseforge",
+  "slug": "all-the-mods-10",
+  "projectId": "925200",
+  "name": "All the Mods 10",
+  "versions": ">=8.0 <9",
+  "presets": [
+    {
+      "id": "fewer-mobs",
+      "title": "Fewer Mobs",
+      "description": "Caps hostile mob counts.",
+      "default": true,
+      "patches": [
+        {
+          "file": "config/mekanism/general.toml",
+          "ops": [
+            { "op": "set", "path": ["general", "radiation"], "value": false, "expect": true },
+            { "op": "set", "path": ["general", "mobCap"], "value": 40 }
+          ]
+        },
+        {
+          "file": "config/late.toml",
+          "ops": [{ "op": "set", "path": ["late", "x"], "value": 1 }]
+        }
+      ]
+    },
+    {
+      "id": "world-rules",
+      "title": "World Rules",
+      "description": "A setting in the world's server config.",
+      "default": false,
+      "patches": [
+        {
+          "file": "world/serverconfig/ftbchunks.toml",
+          "ops": [{ "op": "set", "path": ["max_chunks"], "value": 25 }]
+        }
+      ]
+    }
+  ]
+}

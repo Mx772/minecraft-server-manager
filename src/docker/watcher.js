@@ -135,6 +135,10 @@ async function handleEvent(evt) {
   }
   if (eventStatus === 'health_status: healthy') {
     db.run("UPDATE servers SET status = 'running' WHERE id = ?", serverId);
+    // Files a pack profile could not patch before the first boot may exist now. Fire and forget.
+    require('../services/packProfiles')
+      .onHealthy(serverId)
+      .catch(() => logger.warn('The first-boot profile check failed.', { serverId }));
     return;
   }
   if (eventStatus === 'health_status: unhealthy') {
