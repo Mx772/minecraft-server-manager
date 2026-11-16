@@ -49,3 +49,16 @@ The panel keeps a copy of each file in a `customizations/` folder in the server'
 - **Removing one:** choose **Remove** on the card, or delete the file from inside the `customizations/` folder. Only your copy is deleted, and the pack's version comes back at the next pack update.
 - **Upgrades:** when a server has customizations, the pack upgrade confirmation tells you how many files will be copied back over the new version.
 - **Backups:** backups include the `customizations/` folder, so restoring a backup restores your changes too.
+
+## Recommended setup (pack profiles)
+
+Some packs have a **profile**: a short list of reviewed config changes, such as fewer mob spawns or a safer chunk-loading limit, that suit servers better than the pack's defaults. When a server's pinned pack has a profile, the **Recommended Setup** card appears on the server's **Mods** tab, above **Customizations**.
+
+Profiles ship with the panel. Contributions are welcome as pull requests to the `pack-profiles/` folder; the format is described in [`pack-profiles/README.md`](../pack-profiles/README.md). A profile can only change values in config files.
+
+- **Presets:** a profile is split into presets, each a small group of related changes with a description and a **Why**. Turn each one on or off with its switch. **Show Changes** lists every file and setting a preset touches, with the value it sets.
+- **When they apply:** the panel applies your enabled presets before each start, again after a pack update, and after the first start (when the pack's config files first exist). **Apply Now** applies them immediately; if the server is running, restart it to load the changes.
+- **Turning one off:** this stops future changes. It does not undo what the preset already did. Those values stay until you change them or the pack updates the file.
+- **Needs review:** the panel holds back a change when it is not safe to make. This happens when the pack's value is no longer the one the profile was written against, or when the file's format is one the panel cannot edit safely. Nothing is written for that setting. Check the file and the message on the card, then adjust it yourself if you want it.
+- **Waiting for first start:** the file does not exist until the server has started once. The change applies after that start.
+- **Customized files win:** if a file is in your **Customizations**, the profile skips it and says so on the card. See the section above.

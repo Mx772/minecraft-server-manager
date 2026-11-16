@@ -284,6 +284,7 @@ test('routes: GET shape, presets, manual apply with restartNeeded, permissions',
   assert.equal(r.json.lastRun, null);
   assert.equal(r.json.presets[0].enabled, true);
   assert.deepEqual(Object.keys(r.json.presets[0].patches[0].ops[0]).sort(), [
+    'current',
     'expect',
     'message',
     'op',

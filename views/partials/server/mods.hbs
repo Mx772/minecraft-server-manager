@@ -114,6 +114,15 @@
   {{/if}}
 
   {{#if server.pack}}
+    {{! Loaded by recommended-setup-card.js from /api/servers/:id/profile; stays hidden when no profile matches the pack. }}
+    <div class="mt-6 hidden" data-prof-card="{{server.id}}" data-server-name="{{server.name}}" data-can-edit="{{#if perms.settings}}true{{else}}false{{/if}}" data-can-power="{{#if perms.power}}true{{else}}false{{/if}}">
+      {{#> settings/card heading="Recommended Setup" desc="Settings this pack's profile recommends for servers. Your own customized files always win."}}
+        <div data-prof-body><p class="text-sm text-ink-faint">Loading…</p></div>
+      {{/settings/card}}
+    </div>
+  {{/if}}
+
+  {{#if server.pack}}
     {{! Loaded by customizations-card.js from /api/servers/:id/customizations. }}
     <div class="mt-6" data-cust-card="{{server.id}}">
       {{#> settings/card heading="Customizations" desc="Files you changed on purpose, such as configs and scripts. The panel keeps a copy of each and puts it back over the pack's version every time the server starts, so your changes survive pack updates."}}
@@ -126,4 +135,4 @@
   {{/if}}
 </div>
 <script type="module" src="/js/pages/mods.js"></script>
-{{#if server.pack}}<script type="module" src="/js/pages/customizations-card.js"></script>{{/if}}
+{{#if server.pack}}<script type="module" src="/js/pages/recommended-setup-card.js"></script><script type="module" src="/js/pages/customizations-card.js"></script>{{/if}}

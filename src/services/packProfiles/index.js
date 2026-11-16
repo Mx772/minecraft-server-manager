@@ -21,7 +21,7 @@ const { serializeError } = require('../../utils/logSanitize');
 const SKIPPED_MSG = 'You customized this file, so your version wins.';
 const MISSING_MSG = "This file appears after the server's first start.";
 
-/** @typedef {{ presetId: string, patch: number, op: number, file: string, status: string, message: string }} OpEntry */
+/** @typedef {{ presetId: string, patch: number, op: number, file: string, status: string, message: string, current?: unknown }} OpEntry */
 
 // ---- matching -------------------------------------------------------------
 
@@ -107,6 +107,7 @@ function presetsFor(serverId) {
           expect: o.expect === undefined ? null : o.expect,
           status: e ? e.status : null,
           message: e ? e.message : null,
+          current: e && e.current !== undefined ? e.current : null,
         };
       }),
     })),
@@ -221,7 +222,12 @@ async function applyNow(serverId, { trigger, actor }) {
           record(
             null,
             null,
-            out.results.map((r) => ({ status: r.status, message: r.message }))
+            // `current` (the file's value) lets the UI say what the pack now sets on a held-expect.
+            out.results.map((r) => ({
+              status: r.status,
+              message: r.message,
+              ...(r.current !== undefined ? { current: r.current } : {}),
+            }))
           );
           if (out.changed) changed.add(rel);
         }
