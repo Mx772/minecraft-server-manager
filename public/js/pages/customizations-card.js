@@ -24,6 +24,7 @@ async function init(el) {
     const status = {
       applied: '<span class="badge badge-ok">Applied</span>',
       pending: '<span class="badge badge-info">Applies At Next Start</span>',
+      managed: '<span class="badge badge-info">Managed by Discord Bridge</span>',
       changed:
         '<span class="badge badge-warn" data-tip="This file on the server is newer than your saved copy. At the next start your saved copy replaces it.">Changed Since Captured</span>',
     }[c.state];
@@ -42,7 +43,7 @@ async function init(el) {
       <td data-th="" class="text-right"><div class="flex flex-wrap gap-1 sm:inline-flex sm:flex-nowrap">
         ${changedActions}
         <a class="btn btn-ghost btn-sm" href="${openHref}" data-tip="Open this file's folder in Files.">Open</a>
-        <button type="button" class="btn btn-ghost btn-sm text-danger" data-cust-remove>Remove</button>
+        ${c.state === 'managed' ? '' : '<button type="button" class="btn btn-ghost btn-sm text-danger" data-cust-remove>Remove</button>'}
       </div></td>
     </tr>`;
   }
