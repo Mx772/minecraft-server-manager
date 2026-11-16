@@ -8,6 +8,7 @@ const asyncHandler = require('../middleware/asyncHandler');
 const { makeJsonErrorHandler } = require('../middleware/jsonErrorHandler');
 const fsp = require('node:fs/promises');
 const express = require('express');
+const { ZipArchive } = require('archiver');
 const multer = require('multer');
 const { z } = require('zod');
 const files = require('../../services/files');
@@ -155,6 +156,75 @@ function makeRouter(scope) {
     asyncHandler(async (req, res, next) => {
       const { path: rel, dest } = z.object({ path: pathSchema, dest: pathSchema }).parse(req.body);
       res.json({ ok: true, ...(await files.copy(sid(req), rel, dest, { actor: actorOf(req) })) });
+    })
+  );
+
+  // Multi-select actions. Always 200 with per-item results, even on partial failure.
+  const bulkPaths = z.array(z.string().min(1).max(4096)).min(1).max(files.MAX_BULK_ITEMS);
+  const bulkReply = (res, out) =>
+    res.json({ ok: out.failed === 0, results: out.results, succeeded: out.succeeded, failed: out.failed });
+
+  router.post(
+    '/bulk/delete',
+    asyncHandler(async (req, res, next) => {
+      const { paths } = z.object({ paths: bulkPaths }).parse(req.body);
+      const out = await files.removeMany(sid(req), paths, { actor: actorOf(req) });
+      res.json({
+        ok: out.failed === 0,
+        results: out.results,
+        succeeded: out.succeeded,
+        failed: out.failed,
+        freedBytes: out.freedBytes,
+      });
+    })
+  );
+
+  router.post(
+    '/bulk/move',
+    asyncHandler(async (req, res, next) => {
+      const { paths, dest } = z.object({ paths: bulkPaths, dest: pathSchema }).parse(req.body);
+      bulkReply(res, await files.moveMany(sid(req), paths, dest, { actor: actorOf(req) }));
+    })
+  );
+
+  router.post(
+    '/bulk/copy',
+    asyncHandler(async (req, res, next) => {
+      const { paths, dest } = z.object({ paths: bulkPaths, dest: pathSchema }).parse(req.body);
+      bulkReply(res, await files.copyMany(sid(req), paths, dest, { actor: actorOf(req) }));
+    })
+  );
+
+  // Zip download of a selection. Takes a JSON body or a urlencoded form (a hidden
+  // <form method=post> lets the browser stream the zip straight to disk); a
+  // single urlencoded `paths` arrives as a string, several as an array.
+  router.post(
+    '/download-zip',
+    asyncHandler(async (req, res, next) => {
+      const raw = (req.body || {}).paths;
+      const { paths } = z.object({ paths: bulkPaths }).parse({ paths: typeof raw === 'string' ? [raw] : raw });
+      const sel = await files.zipEntries(sid(req), paths);
+      const label =
+        scope === 'server' ? (servers.getServer(req.params.id) || {}).display_name || req.params.id : 'server-data';
+      const safeName =
+        String(label)
+          .replace(/[^\w.-]+/g, '_')
+          .replace(/^_+|_+$/g, '') || 'files';
+      res.attachment(`${safeName}-files.zip`);
+      const zip = new ZipArchive({ zlib: { level: 6 } });
+      zip.on('error', (err) => {
+        logger.error('A file selection zip stream failed.', { serverId: sid(req), err: serializeError(err) });
+        if (res.headersSent) return res.destroy();
+        res.status(500).end();
+      });
+      // A cancelled download closes `res` early: stop reading files nobody will receive.
+      res.on('close', () => {
+        if (!res.writableFinished) zip.abort();
+      });
+      zip.pipe(res);
+      for (const f of sel.files) zip.file(f.abs, { name: f.name });
+      for (const d of sel.emptyDirs) zip.append(Buffer.alloc(0), { name: `${d}/` });
+      zip.finalize();
     })
   );
 
