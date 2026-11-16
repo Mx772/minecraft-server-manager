@@ -93,6 +93,33 @@ for s in scenarios:
     ta, tb = g(s, "edit", "spike_toml_mtime"), g(s, "restart", "spike_toml_mtime")
     out.append(f"| {s} | {a} | {b} | {yn(a != b)} | {yn(ta != tb)} |")
 
+env_s = "sync-env-substitution"
+out += [
+    "",
+    "## Q6: are CFG_ placeholders substituted into a synced .toml file?",
+    "",
+    "| step | live bridge.toml | token substituted? | NOT_PREFIXED left literal? | source copy unchanged? | source copy |",
+    "|---|---|---|---|---|---|",
+]
+for st in ("install1", "upgrade"):
+    live, src = g(env_s, st, "bridge_toml"), g(env_s, st, "bridge_src")
+    out.append(
+        f"| {st} | `{live}` | {yn('spike-secret-123' in live)} | {yn('${NOT_PREFIXED}' in live)} | "
+        f"{yn('${CFG_SPIKE_TOKEN}' in src and 'spike-secret-123' not in src)} | `{src}` |"
+    )
+
+out += [
+    "",
+    "## Q7: does the sync preserve the source mtime on the destination?",
+    "",
+    "| step | file | source mtime | dest mtime | preserved? |",
+    "|---|---|---|---|---|",
+]
+for st in ("install1", "upgrade"):
+    for label, k in (("spike.toml", "spike"), ("bridge.toml", "bridge")):
+        a, b = g(env_s, st, k + "_mtime_src"), g(env_s, st, k + "_mtime_dst")
+        out.append(f"| {st} | {label} | {a} | {b} | {yn(a == b)} |")
+
 out += ["", "## Step status", "", "| scenario | step | exit code | notes |", "|---|---|---|---|"]
 for (s, st), d in rows.items():
     if "exit_code" in d:

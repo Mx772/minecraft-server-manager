@@ -27,6 +27,11 @@ The job summary and the `summary.md` artifact hold one table per question:
 - Q4: does the `/config` sync with `COPY_CONFIG_DEST=/data` delete files missing from its source
   (`unrelated.toml`, `canary.txt`)? This is safety-critical.
 - Q5: are customization files rewritten on every start (mtime across the restart step)?
+- Q6: in the `sync-env-substitution` scenario, are `${CFG_*}` placeholders substituted into a synced
+  `.toml` file (live `bridge.toml` has the secret, `${NOT_PREFIXED}` stays literal, and the source
+  copy is unchanged)?
+- Q7: does the sync preserve the source file's mtime on the destination (`spike.toml` and
+  `bridge.toml`, after install1 and after the upgrade)? Both mtimes are printed.
 
 A "NO" is a finding, not a failure. The job fails only on infrastructure problems (container exit
 code other than 0, or setup not producing expected files). `results.tsv` is the raw data, and each

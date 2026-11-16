@@ -20,6 +20,14 @@ printf 'value = "custom"\n' > "$CUSTOM/config/spike.toml"
 printf '// custom\n' > "$CUSTOM/kubejs/server_scripts/spike.js"
 chmod -R a+rX "$CUSTOM"
 
+# Separate source tree for the env-substitution scenario (adds config/bridge.toml, fixed old mtimes).
+CUSTOM_ENV="$OUT/customizations-env"
+mkdir -p "$CUSTOM_ENV"
+cp -a "$CUSTOM/." "$CUSTOM_ENV/"
+printf '[bot]\ndiscordBotToken = "${CFG_SPIKE_TOKEN}"\nuntouched = "${NOT_PREFIXED}"\n' > "$CUSTOM_ENV/config/bridge.toml"
+chmod -R a+rX "$CUSTOM_ENV"
+touch -d '2020-01-02 03:04:05.123456789' "$CUSTOM_ENV/config/spike.toml" "$CUSTOM_ENV/config/bridge.toml"
+
 exists() { if [ -e "$1" ]; then echo present; else echo absent; fi; }
 content() {
   if [ -f "$1" ]; then tr -d '\r' < "$1" | head -c 200 | tr '\n\t' '  ' | sed 's/ *$//'; else echo absent; fi
@@ -38,6 +46,17 @@ snapshot() { # scenario step datadir
   rec "$s" "$st" hand_added "$(exists "$d/mods/hand-added.jar")"
   rec "$s" "$st" unrelated "$(exists "$d/config/unrelated.toml")"
   rec "$s" "$st" canary "$(exists "$d/canary.txt")"
+}
+
+# Extra records for the env-substitution scenario: live vs source content and mtimes.
+snapshot_env() { # scenario step datadir
+  local s=$1 st=$2 d=$3
+  rec "$s" "$st" bridge_toml "$(content "$d/config/bridge.toml")"
+  rec "$s" "$st" bridge_src "$(content "$CUSTOM_ENV/config/bridge.toml")"
+  rec "$s" "$st" bridge_mtime_dst "$(mtime "$d/config/bridge.toml")"
+  rec "$s" "$st" bridge_mtime_src "$(mtime "$CUSTOM_ENV/config/bridge.toml")"
+  rec "$s" "$st" spike_mtime_dst "$(mtime "$d/config/spike.toml")"
+  rec "$s" "$st" spike_mtime_src "$(mtime "$CUSTOM_ENV/config/spike.toml")"
 }
 
 # run_step scenario step platform pack -- extra docker args...
@@ -69,6 +88,7 @@ run_step() {
     tail -n 60 "$log" > "$OUT/$s/$st.fail-tail.log"
   fi
   snapshot "$s" "$st" "$d"
+  if [ "$s" = sync-env-substitution ]; then snapshot_env "$s" "$st" "$d"; fi
   return "$rc"
 }
 
@@ -119,6 +139,7 @@ scenario baseline modrinth
 scenario extra-files modrinth "${CUSTOM_MOUNT[@]}" -e "APPLY_EXTRA_FILES=$EXTRA_FILES"
 scenario sync-default modrinth "${CUSTOM_MOUNT[@]}" -e COPY_CONFIG_SRC=/customizations -e COPY_CONFIG_DEST=/data
 scenario sync-no-skip-newer modrinth "${CUSTOM_MOUNT[@]}" -e COPY_CONFIG_SRC=/customizations -e COPY_CONFIG_DEST=/data -e SYNC_SKIP_NEWER_IN_DESTINATION=false
+scenario sync-env-substitution modrinth -v "$CUSTOM_ENV:/customizations:ro" -e COPY_CONFIG_SRC=/customizations -e COPY_CONFIG_DEST=/data -e SYNC_SKIP_NEWER_IN_DESTINATION=false -e CFG_SPIKE_TOKEN=spike-secret-123
 
 # Best-effort CurseForge scenarios (need an API key).
 if [ -n "${CF_API_KEY:-}" ]; then
