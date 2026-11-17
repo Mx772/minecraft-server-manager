@@ -334,9 +334,31 @@
             "additionalProperties": {
               "type": ["number", "boolean"]
             }
+          },
+          "files": {
+            "default": [],
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300
+                },
+                "format": {
+                  "type": "string",
+                  "enum": ["toml", "json", "properties"]
+                },
+                "content": {}
+              },
+              "required": ["path", "content"],
+              "additionalProperties": false
+            }
           }
         },
-        "required": ["id", "title", "description", "default", "patches"],
+        "required": ["id", "title", "description", "default", "patches", "files"],
         "additionalProperties": false
       }
     }

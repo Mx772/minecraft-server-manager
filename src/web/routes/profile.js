@@ -23,6 +23,8 @@ const changesBody = z.object({
 
 const reviewBody = z.object({ enable: z.array(z.string().min(1).max(100)).max(50) });
 
+const replaceBody = z.object({ presetId: z.string().min(1).max(100), path: z.string().min(1).max(300) });
+
 const RUNNING = ['running', 'starting', 'unhealthy', 'stalled'];
 
 /** Apply results the UI needs after an action that may have changed files or settings. */
@@ -70,6 +72,23 @@ router.post(
     const { enable } = reviewBody.parse(req.body);
     const { out, ...state } = await packProfiles.review(req.params.id, enable, { actor: req.user.username });
     res.json({ ok: true, ...applyShape(server, out), ...state });
+  })
+);
+
+router.post(
+  '/replace-file',
+  asyncHandler(async (req, res) => {
+    const server = mustGet(req);
+    const { presetId, path } = replaceBody.parse(req.body);
+    const { changedFiles, rebuildNeeded, ...state } = await packProfiles.replaceFile(server.id, presetId, path, {
+      actor: req.user.username,
+    });
+    res.json({
+      ok: true,
+      restartNeeded: RUNNING.includes(server.status) && changedFiles.length > 0,
+      rebuildNeeded,
+      ...state,
+    });
   })
 );
 

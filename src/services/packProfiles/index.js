@@ -14,19 +14,29 @@ const { recordEvent } = require('../../events');
 const { dataPath, safeJoin } = require('../../storage/pathGuard');
 const { getField } = require('../../config/field-catalog');
 const configPatch = require('../configPatch');
+const { detectFormat } = configPatch;
 const loader = require('./loader');
 const { satisfies } = require('./version');
 const { toEnvValue } = require('./settings');
+const { serializeFile, previewOf } = require('./fileContent');
 const logger = require('../../logger')(path.basename(__filename));
 const { serializeError } = require('../../utils/logSanitize');
 
 const SKIPPED_MSG = 'You customized this file, so your version wins.';
 const MISSING_MSG = "This file appears after the server's first start.";
+const FILE_HELD_MSG =
+  "This file already has its own rules, so the profile's version wasn't added. Review it to replace it.";
+const FILE_REPLACED_MSG = 'Replaced the empty default file.';
+const FILE_APPLIED_MSG = 'Added. The server loads it at the next start.';
+const FILE_UNCHANGED_MSG = 'The server already has this file.';
+const FILE_PACK_SAME_MSG = "The pack's own file already matches, so nothing was added.";
+const FILE_ERROR_MSG = 'This file could not be added.';
 const SETTING_APPLIED_MSG = 'Saved. Rebuild the server to use it.';
 const SETTING_UNCHANGED_MSG = 'The server already uses this value.';
 const SETTING_ERROR_MSG = 'This setting could not be saved.';
 
 /** @typedef {{ kind: string, presetId: string, key: string, value: unknown, status: string, message: string }} SettingEntry */
+/** @typedef {{ kind: string, presetId: string, file: string, status: string, message: string }} FileEntry */
 /** @typedef {{ presetId: string, patch: number, op: number, file: string, status: string, message: string, current?: unknown }} OpEntry */
 
 // ---- matching -------------------------------------------------------------
@@ -121,9 +131,8 @@ function presetsFor(serverId) {
   const chosen = choices(serverId, profile.id);
   const row = lastRunRow(serverId, profile.id);
   const entries = parseEntries(row);
-  const byKey = new Map(
-    entries.filter((e) => e.kind !== 'setting').map((e) => [`${e.presetId}|${e.patch}|${e.op}`, e])
-  );
+  const byKey = new Map(entries.filter((e) => !e.kind).map((e) => [`${e.presetId}|${e.patch}|${e.op}`, e]));
+  const byFile = new Map(entries.filter((e) => e.kind === 'file').map((e) => [`${e.presetId}|${e.file}`, e]));
   const bySetting = new Map(entries.filter((e) => e.kind === 'setting').map((e) => [`${e.presetId}|${e.key}`, e]));
   const review = reviewState(serverId, profile);
   const isNew = new Set(review.newPresetIds);
@@ -143,6 +152,20 @@ function presetsFor(serverId) {
         value,
         status: e ? e.status : null,
         message: e ? e.message : null,
+      };
+    }),
+    files: pr.files.map((f) => {
+      const e = chosen.get(pr.id) === true ? byFile.get(`${pr.id}|${f.path}`) : null;
+      const text = serializeFile(f);
+      return {
+        path: f.path,
+        format: f.format || detectFormat(f.path),
+        size: Buffer.byteLength(text, 'utf8'),
+        status: e ? e.status : null,
+        message: e ? e.message : null,
+        preview: previewOf(text),
+        hasBackup: Boolean(getBackup(serverId, f.path)),
+        currentPreview: e && e.status === 'held-exists' ? e.currentPreview || null : null,
       };
     }),
     patches: pr.patches.map((pa, pi) => ({
@@ -298,6 +321,229 @@ function applySettings(serverId, profile, server, actor) {
   }
 }
 
+const FILE_BACKUP_MAX = 64 * 1024;
+
+const ownerOf = (profile, presetId) => `${require('../customizations').PROFILE_OWNER_PREFIX}${profile.id}/${presetId}`;
+
+/** True when a config file holds nothing a mod would miss: empty, `[]`/`{}`, or only comments. */
+function isEmptyDefault(format, text) {
+  if (text.trim() === '') return true;
+  if (format === 'json') {
+    try {
+      const v = JSON.parse(text);
+      return Array.isArray(v) ? v.length === 0 : Boolean(v) && typeof v === 'object' && Object.keys(v).length === 0;
+    } catch {
+      return false;
+    }
+  }
+  const comment = format === 'properties' ? /^\s*([#!].*)?$/ : /^\s*(#.*)?$/;
+  return text.split(/\r?\n/).every((line) => comment.test(line));
+}
+
+const saveBackup = (serverId, rel, buf) =>
+  db.run(
+    `INSERT INTO server_profile_file_backups (server_id, path, previous_content) VALUES (?, ?, ?)
+     ON CONFLICT (server_id, path) DO UPDATE SET previous_content = excluded.previous_content, saved_at = datetime('now')`,
+    serverId,
+    rel,
+    buf
+  );
+const getBackup = (serverId, rel) =>
+  db.get('SELECT previous_content FROM server_profile_file_backups WHERE server_id = ? AND path = ?', serverId, rel);
+const dropBackup = (serverId, rel) =>
+  db.run('DELETE FROM server_profile_file_backups WHERE server_id = ? AND path = ?', serverId, rel);
+
+/** Write the owned copy (restored by the start-time sync) and the live file now. @returns {Promise<boolean>} rebuild needed */
+async function placeFile(serverId, rel, abs, text, owner) {
+  const w = await require('../customizations').writeOwned(serverId, rel, text, owner);
+  await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+  await fs.promises.writeFile(abs, text);
+  return Boolean(w.needsRebuild);
+}
+
+/**
+ * Add the enabled presets' whole files. Each file is written as an owned
+ * customization (so the start-time sync restores it) and to the live folder now.
+ * A file the user customized is never touched. A file the pack or a mod already
+ * made is replaced only when it is an empty default (its bytes are backed up);
+ * real content is held for the user to review. Never throws.
+ * @returns {Promise<{ entries: FileEntry[], changed: string[], rebuildNeeded: boolean }>}
+ */
+async function applyFiles(serverId, profile, server) {
+  const customizations = require('../customizations');
+  const owned = customizations.ownedPaths(serverId);
+  const userCustom = new Set([...(await customizations.customizedPaths(serverId))].filter((r) => !owned.has(r)));
+  /** @type {FileEntry[]} */
+  const entries = [];
+  const changed = [];
+  let rebuildNeeded = false;
+  for (const preset of enabledPresets(serverId, profile)) {
+    for (const f of preset.files) {
+      /** @type {any} */
+      const entry = {
+        kind: 'file',
+        presetId: preset.id,
+        file: f.path,
+        status: 'unchanged',
+        message: FILE_UNCHANGED_MSG,
+      };
+      entries.push(entry);
+      try {
+        const text = serializeFile(f);
+        const { rel, abs } = resolveFile(serverId, server, f.path);
+        const owner = ownerOf(profile, preset.id);
+        const ours = await customizations.readOwned(serverId, rel, owner);
+        if (userCustom.has(rel)) {
+          entry.status = 'skipped-customized';
+          entry.message = SKIPPED_MSG;
+          continue;
+        }
+        const lst = await fs.promises.lstat(abs).catch(() => null);
+        if (lst && !lst.isFile()) throw new Error('The path is not a regular file.');
+        const liveBuf = lst ? await fs.promises.readFile(abs) : null;
+        const live = liveBuf ? liveBuf.toString('utf8') : null;
+        const mine = ours !== null || owned.has(rel);
+        let replaced = false;
+        if (!mine && live !== null) {
+          if (live === text) {
+            entry.message = FILE_PACK_SAME_MSG;
+            continue;
+          }
+          if (!isEmptyDefault(f.format || detectFormat(f.path), live) || liveBuf.length > FILE_BACKUP_MAX) {
+            entry.status = 'held-exists';
+            entry.message = FILE_HELD_MSG;
+            entry.currentPreview = previewOf(live);
+            continue;
+          }
+          saveBackup(serverId, rel, liveBuf);
+          replaced = true;
+        }
+        if (ours !== text || live !== text) {
+          rebuildNeeded = (await placeFile(serverId, rel, abs, text, owner)) || rebuildNeeded;
+          entry.status = 'applied';
+          entry.message = replaced ? FILE_REPLACED_MSG : FILE_APPLIED_MSG;
+          changed.push(rel);
+        }
+      } catch (err) {
+        logger.warn('A pack profile file could not be added.', {
+          serverId,
+          profileId: profile.id,
+          presetId: preset.id,
+          err: serializeError(err, { includeStack: false }),
+        });
+        entry.status = 'error';
+        entry.message = FILE_ERROR_MSG;
+      }
+    }
+  }
+  return { entries, changed, rebuildNeeded };
+}
+
+/**
+ * Turning a preset off removes the files it added: the owned copy always; the
+ * live file only while it still holds exactly what the profile wrote, and then
+ * the file it replaced (if any) is put back. Never throws.
+ * @returns {Promise<string[]>} server-relative paths whose live file was changed
+ */
+async function removeFiles(serverId, profile, presetIds) {
+  const removed = [];
+  try {
+    const server = require('../servers').getServer(serverId);
+    if (!server) return removed;
+    const customizations = require('../customizations');
+    for (const preset of profile.presets.filter((p) => presetIds.includes(p.id))) {
+      for (const f of preset.files) {
+        try {
+          const { rel, abs } = resolveFile(serverId, server, f.path);
+          const owner = ownerOf(profile, preset.id);
+          const ours = await customizations.readOwned(serverId, rel, owner);
+          if (ours === null) continue; // we never added this file
+          await customizations.removeOwned(serverId, rel, owner);
+          const lst = await fs.promises.lstat(abs).catch(() => null);
+          const live = lst && lst.isFile() ? await fs.promises.readFile(abs, 'utf8') : null;
+          if (live === ours) {
+            const backup = getBackup(serverId, rel);
+            if (backup) {
+              await fs.promises.writeFile(abs, Buffer.from(backup.previous_content));
+              dropBackup(serverId, rel);
+            } else {
+              await fs.promises.rm(abs, { force: true });
+            }
+            removed.push(rel);
+          } else if (live !== null) {
+            logger.debug('Left a changed profile file in place.', { serverId, presetId: preset.id });
+          }
+        } catch (err) {
+          logger.warn('A pack profile file could not be removed.', {
+            serverId,
+            presetId: preset.id,
+            err: serializeError(err, { includeStack: false }),
+          });
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn('Removing pack profile files failed.', { serverId, err: serializeError(err, { includeStack: false }) });
+  }
+  return removed;
+}
+
+/**
+ * The user chose to replace a file the pack (or a mod) already has with the
+ * profile's version. The current bytes are saved first so turning the preset off
+ * can put them back.
+ * @param {string} serverId
+ * @param {string} presetId
+ * @param {string} file the profile file path
+ * @param {{ actor?: string }} [opts]
+ */
+async function replaceFile(serverId, presetId, file, { actor = 'system' } = {}) {
+  const profile = profileFor(serverId);
+  if (!profile) throw httpError(404, 'This server has no recommended settings profile.');
+  const preset = enabledPresets(serverId, profile).find((p) => p.id === presetId);
+  const f = preset && preset.files.find((x) => x.path === file);
+  if (!preset || !f) throw httpError(400, 'That file is not part of a settings group you turned on.');
+  const server = require('../servers').getServer(serverId);
+  if (!server) throw httpError(404, 'Server not found.');
+  const customizations = require('../customizations');
+  const { rel, abs } = resolveFile(serverId, server, f.path);
+  const text = serializeFile(f);
+  const owner = ownerOf(profile, preset.id);
+  const rebuildNeeded = await serialized(serverId, async () => {
+    const owned = customizations.ownedPaths(serverId);
+    const userCustom = (await customizations.customizedPaths(serverId)).has(rel) && !owned.has(rel);
+    const lst = await fs.promises.lstat(abs).catch(() => null);
+    const liveBuf = lst && lst.isFile() ? await fs.promises.readFile(abs) : null;
+    if (userCustom || owned.has(rel) || !liveBuf || liveBuf.toString('utf8') === text) {
+      throw httpError(409, 'This file is not waiting to be replaced.');
+    }
+    if (liveBuf.length > FILE_BACKUP_MAX) {
+      throw httpError(413, 'That file is too large to save a copy of, so it was not replaced.');
+    }
+    saveBackup(serverId, rel, liveBuf);
+    const rebuild = await placeFile(serverId, rel, abs, text, owner);
+    // Keep the card's last results in step so it shows the file as added.
+    const row = lastRunRow(serverId, profile.id);
+    if (row) {
+      const next = parseEntries(row).map((e) =>
+        e.kind === 'file' && e.presetId === presetId && e.file === file
+          ? { ...e, status: 'applied', message: FILE_REPLACED_MSG, currentPreview: undefined }
+          : e
+      );
+      db.run('UPDATE server_profile_runs SET results_json = ? WHERE server_id = ?', JSON.stringify(next), serverId);
+    }
+    return rebuild;
+  });
+  recordEvent({
+    serverId,
+    actor,
+    type: 'profile-file-replaced',
+    summary: `Replaced ${file} with the ${profile.name} profile's version. The old file was saved and comes back if you turn the preset off.`,
+    details: { profileId: profile.id, presetId, path: file },
+  });
+  return { changedFiles: [rel], rebuildNeeded, ...presetsFor(serverId) };
+}
+
 async function applyNow(serverId, { trigger, actor, withSettings }) {
   const profile = profileFor(serverId);
   const empty = {
@@ -307,6 +553,7 @@ async function applyNow(serverId, { trigger, actor, withSettings }) {
     heldMissing: 0,
     changedFiles: [],
     results: [],
+    fileResults: [],
     settingResults: [],
     settingsChanged: 0,
     rebuildNeeded: false,
@@ -377,17 +624,32 @@ async function applyNow(serverId, { trigger, actor, withSettings }) {
     settingResults = parseEntries(previous).filter((e) => e.kind === 'setting');
   }
 
-  const applied = entries.filter((e) => e.status === 'applied').length;
-  const held = entries.filter(isHeld).length;
-  const heldMissing = entries.filter((e) => e.status === 'held-missing').length;
-  const review = entries.filter((e) => isHeld(e) && e.status !== 'held-missing').length;
+  // Added files, like settings, are only written for a user action; hooks keep the last results
+  // (the start-time customizations sync restores the files by itself).
+  /** @type {FileEntry[]} */
+  let fileResults;
+  if (withSettings) {
+    const out = await applyFiles(serverId, profile, server);
+    fileResults = out.entries;
+    rebuildNeeded = rebuildNeeded || out.rebuildNeeded;
+    for (const rel of out.changed) changed.add(rel);
+  } else {
+    const on = new Set(enabledPresets(serverId, profile).map((p) => p.id));
+    fileResults = parseEntries(previous).filter((e) => e.kind === 'file' && on.has(e.presetId));
+  }
+
+  const everything = [...entries, ...fileResults];
+  const applied = everything.filter((e) => e.status === 'applied').length;
+  const held = everything.filter(isHeld).length;
+  const heldMissing = everything.filter((e) => e.status === 'held-missing').length;
+  const review = everything.filter((e) => isHeld(e) && e.status !== 'held-missing').length;
   const signature = (list) =>
     list
       .filter(isHeld)
-      .map((e) => `${e.presetId}|${e.patch}|${e.op}|${e.status}`)
+      .map((e) => `${e.presetId}|${e.kind === 'file' ? `file:${e.file}` : `${e.patch}|${e.op}`}|${e.status}`)
       .sort()
       .join('\n');
-  const heldChanged = signature(entries) !== signature(parseEntries(previous).filter((e) => e.kind !== 'setting'));
+  const heldChanged = signature(everything) !== signature(parseEntries(previous).filter((e) => e.kind !== 'setting'));
 
   db.run(
     `INSERT INTO server_profile_runs (server_id, profile_id, ran_at, trigger, results_json)
@@ -397,7 +659,7 @@ async function applyNow(serverId, { trigger, actor, withSettings }) {
     serverId,
     profile.id,
     trigger,
-    JSON.stringify([...entries, ...settingResults])
+    JSON.stringify([...entries, ...fileResults, ...settingResults])
   );
 
   if (applied > 0 || heldChanged) {
@@ -426,6 +688,7 @@ async function applyNow(serverId, { trigger, actor, withSettings }) {
     heldMissing,
     changedFiles: [...changed],
     results: entries,
+    fileResults,
     settingResults,
     settingsChanged,
     rebuildNeeded,
@@ -433,14 +696,34 @@ async function applyNow(serverId, { trigger, actor, withSettings }) {
 }
 
 /**
- * Save preset choices, then apply what the user has on (config patches and
- * settings), so turning a preset on takes effect now. Turning one off never
- * reverts anything.
+ * Save preset choices, then apply what the user has on (config patches, settings,
+ * and added files), so turning a preset on takes effect now. Turning one off never
+ * reverts a patch or setting; it only removes the whole files the preset added.
  */
 async function savePresets(serverId, changes, { actor = 'system' } = {}) {
   setPresets(serverId, changes, { actor });
+  const profile = profileFor(serverId);
+  const off = changes.filter((c) => !c.enabled).map((c) => c.presetId);
+  const removed =
+    profile && off.length > 0 ? await serialized(serverId, () => removeFiles(serverId, profile, off)) : [];
   const turnedOn = changes.some((c) => c.enabled);
-  const out = turnedOn ? await apply(serverId, { trigger: 'manual', actor, withSettings: true }) : null;
+  let out = turnedOn ? await apply(serverId, { trigger: 'manual', actor, withSettings: true }) : null;
+  if (removed.length > 0) {
+    out = out
+      ? { ...out, changedFiles: [...out.changedFiles, ...removed] }
+      : {
+          profile,
+          applied: 0,
+          held: 0,
+          heldMissing: 0,
+          changedFiles: removed,
+          results: [],
+          fileResults: [],
+          settingResults: [],
+          settingsChanged: 0,
+          rebuildNeeded: false,
+        };
+  }
   return { out, ...presetsFor(serverId) };
 }
 
@@ -586,6 +869,7 @@ async function apply(serverId, { trigger = 'manual', actor = 'system', withSetti
       changedFiles: [],
       results: [],
       settingResults: [],
+      fileResults: [],
       settingsChanged: 0,
       rebuildNeeded: false,
     };
@@ -641,6 +925,7 @@ module.exports = {
   presetsFor,
   setPresets,
   savePresets,
+  replaceFile,
   review,
   checkForSuggestions,
   checkAllForSuggestions,
@@ -651,4 +936,5 @@ module.exports = {
   reloadProfiles: loader.reload,
   SKIPPED_MSG,
   MISSING_MSG,
+  FILE_HELD_MSG,
 };

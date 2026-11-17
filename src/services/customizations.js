@@ -30,6 +30,9 @@ const SECRET_MSG =
   'This customization fills in a secret when the server starts, so it can only be edited in the customizations folder.';
 
 const OWNED_MSG = 'This file is managed by the Discord chat bridge. Change it from the Discord tab.';
+const PROFILE_OWNED_MSG = 'This file is managed by Recommended Setup. Change it from the Mods tab.';
+/** Owner names of Recommended Setup files are `pack-profile:<profileId>/<presetId>`. */
+const PROFILE_OWNER_PREFIX = 'pack-profile:';
 
 /** Owner name (e.g. 'discord-chat-bridge') of a customization path, or null. Owned files are managed by a panel feature. */
 function ownerOf(serverId, rel) {
@@ -45,6 +48,12 @@ const isOwnedPath = (serverId, rel) =>
   Boolean(ownerOf(serverId, rel)) ||
   // Lazy require (cycle-breaker): chatBridge requires this module. Only where the bridge exists.
   require('../integrations/chatBridge').protectedLivePaths(serverId).includes(rel);
+
+/** The refusal text for an owned path, naming the feature that owns it. */
+function ownedMsg(serverId, rel) {
+  const owner = ownerOf(serverId, rel);
+  return owner && owner.startsWith(PROFILE_OWNER_PREFIX) ? PROFILE_OWNED_MSG : OWNED_MSG;
+}
 
 const plural = (n) => `${n} file${n === 1 ? '' : 's'}`;
 
@@ -289,7 +298,7 @@ async function eachCustomized(serverId, paths, fn) {
         throw httpError(404, 'That file is not customized.');
       }
       // A selected file that is owned is refused; owned files inside a folder are skipped.
-      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
+      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, ownedMsg(serverId, rel));
       const rels = lst.isDirectory()
         ? (await walkFiles(copyAbs)).map((r) => `${rel}/${r}`).filter((r) => !isOwnedPath(serverId, r))
         : [rel];
@@ -398,7 +407,7 @@ async function add(serverId, paths, { actor = 'system' } = {}) {
         rels = (await walkFiles(abs)).map((r) => `${rel}/${r}`).filter((r) => !isOwnedPath(serverId, r));
         if (!rels.length) throw httpError(400, 'That folder has no files in it.');
       } else if (lst.isFile()) {
-        if (isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
+        if (isOwnedPath(serverId, rel)) throw httpError(400, ownedMsg(serverId, rel));
         rels = [rel];
       } else {
         throw httpError(400, 'Only files and folders can be customized.');
@@ -512,7 +521,7 @@ async function remove(serverId, paths, { actor = 'system' } = {}) {
       const abs = safeJoin(dir, rel);
       const lst = await fsp.lstat(abs).catch(() => null);
       if (!lst) throw httpError(404, 'That is not customized.');
-      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, OWNED_MSG);
+      if (!lst.isDirectory() && isOwnedPath(serverId, rel)) throw httpError(400, ownedMsg(serverId, rel));
       const all = lst.isDirectory() ? (await walkFiles(abs)).map((r) => `${rel}/${r}`) : [rel];
       const rels = all.filter((r) => !isOwnedPath(serverId, r));
       if (rels.length === all.length) {
@@ -634,6 +643,9 @@ module.exports = {
   readOwned,
   ownedPaths,
   OWNED_MSG,
+  PROFILE_OWNED_MSG,
+  PROFILE_OWNER_PREFIX,
+  ownedMsg,
   list,
   add,
   remove,

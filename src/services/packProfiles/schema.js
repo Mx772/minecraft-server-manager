@@ -9,6 +9,7 @@ const { z } = require('zod');
 const { detectFormat } = require('../configPatch');
 const { isValidRange } = require('./version');
 const { ALLOWED_SETTING_KEYS, settingProblem } = require('./settings');
+const { contentProblem } = require('./fileContent');
 
 const PLATFORMS = ['curseforge', 'modrinth', 'ftb', 'gtnh'];
 const ROOTS = ['config', 'defaultconfigs', 'world/serverconfig'];
@@ -30,6 +31,38 @@ function filePathProblem(file) {
   if (!detectFormat(file)) return 'must be a .toml, .json, or .properties file';
   return null;
 }
+
+// Added whole files live in the customizations folder, which cannot hold world files,
+// so unlike patches they may not target world/serverconfig/.
+const FILE_ROOTS = ['config', 'defaultconfigs'];
+
+const addedFile = z
+  .strictObject({
+    path: z.string().min(1).max(300),
+    format: z.enum(['toml', 'json', 'properties']).optional(),
+    content: z.unknown(),
+  })
+  .superRefine((f, ctx) => {
+    const problem = filePathProblem(f.path);
+    if (problem) {
+      ctx.addIssue({ code: 'custom', path: ['path'], message: `File path ${problem}.` });
+      return;
+    }
+    if (!FILE_ROOTS.some((r) => f.path.startsWith(`${r}/`))) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['path'],
+        message: 'Added files must be under config/ or defaultconfigs/.',
+      });
+      return;
+    }
+    if (f.format && f.format !== detectFormat(f.path)) {
+      ctx.addIssue({ code: 'custom', path: ['format'], message: 'Format does not match the file extension.' });
+      return;
+    }
+    const why = contentProblem(f);
+    if (why) ctx.addIssue({ code: 'custom', path: ['content'], message: `Content ${why}.` });
+  });
 
 const scalar = z.union([z.string().max(2000), z.number().finite(), z.boolean()]);
 const value = z.union([scalar, z.array(scalar).max(500)]);
@@ -84,11 +117,18 @@ const preset = z
     default: z.boolean(),
     patches: z.array(patch).max(50).default([]),
     settings: settings.optional(),
+    files: z.array(addedFile).max(10).default([]),
   })
   .superRefine((p, ctx) => {
-    if (p.patches.length === 0 && (!p.settings || Object.keys(p.settings).length === 0)) {
-      ctx.addIssue({ code: 'custom', path: ['patches'], message: 'A preset needs patches or settings.' });
+    if (p.patches.length === 0 && p.files.length === 0 && (!p.settings || Object.keys(p.settings).length === 0)) {
+      ctx.addIssue({ code: 'custom', path: ['patches'], message: 'A preset needs patches, settings, or files.' });
     }
+    const seenPaths = new Set();
+    p.files.forEach((f, i) => {
+      if (seenPaths.has(f.path))
+        ctx.addIssue({ code: 'custom', path: ['files', i, 'path'], message: 'Duplicate file.' });
+      seenPaths.add(f.path);
+    });
   });
 
 const profile = z
@@ -115,7 +155,14 @@ const profile = z
       ctx.addIssue({ code: 'custom', path: ['id'], message: 'The id must be "<platform>/<slug>".' });
     }
     const seen = new Set();
+    const filePaths = new Set();
     p.presets.forEach((pr, i) => {
+      pr.files.forEach((f, fi) => {
+        if (filePaths.has(f.path)) {
+          ctx.addIssue({ code: 'custom', path: ['presets', i, 'files', fi, 'path'], message: 'Duplicate file.' });
+        }
+        filePaths.add(f.path);
+      });
       if (seen.has(pr.id))
         ctx.addIssue({ code: 'custom', path: ['presets', i, 'id'], message: 'Duplicate preset id.' });
       seen.add(pr.id);

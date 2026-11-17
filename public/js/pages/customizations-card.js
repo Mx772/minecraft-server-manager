@@ -24,7 +24,9 @@ async function init(el) {
     const status = {
       applied: '<span class="badge badge-ok">Applied</span>',
       pending: '<span class="badge badge-info">Applies At Next Start</span>',
-      managed: '<span class="badge badge-info">Managed by Discord Bridge</span>',
+      managed: `<span class="badge badge-info">${
+        c.owner && c.owner.startsWith('pack-profile:') ? 'Managed by Recommended Setup' : 'Managed by Discord Bridge'
+      }</span>`,
       changed:
         '<span class="badge badge-warn" data-tip="This file on the server is newer than your saved copy. At the next start your saved copy replaces it.">Changed Since Captured</span>',
     }[c.state];

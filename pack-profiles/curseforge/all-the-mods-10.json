@@ -21,6 +21,86 @@
       }
     },
     {
+      "id": "server-pack-mob-caps",
+      "title": "Server Pack Mob Caps",
+      "description": "Stops more of a hostile mob from spawning once a dimension already has 15 of it (5 for bats), like the official server files.",
+      "why": "Keeps mob counts, and the lag that comes with them, in check on a busy server. Uses the In Control mod, which the pack includes.",
+      "default": true,
+      "files": [
+        {
+          "path": "config/incontrol/spawn.json",
+          "format": "json",
+          "content": [
+            {
+              "mob": "minecraft:zombie",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "minecraft:bat",
+              "mincount": 5,
+              "result": "deny"
+            },
+            {
+              "mob": "minecraft:skeleton",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "minecraft:creeper",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "minecraft:spider",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "minecraft:enderman",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "irons_spellbooks:necromancer",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "minecraft:cave_spider",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "creeperoverhaul:cave_creeper",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "minecraft:drowned",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "creeperoverhaul:dripstone_creeper",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "endermanoverhaul:cave_enderman",
+              "mincount": 15,
+              "result": "deny"
+            },
+            {
+              "mob": "endermanoverhaul:badlands_enderman",
+              "mincount": 15,
+              "result": "deny"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "no-computer-internet",
       "title": "Keep In-Game Computers Offline",
       "description": "Stops ComputerCraft computers from making web requests or opening websockets from your server.",

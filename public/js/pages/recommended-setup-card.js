@@ -5,6 +5,7 @@
 import { toast } from '../lib/toast.js';
 import { friendlyError } from '../lib/errors.js';
 import { withBusy } from '../lib/loading.js';
+import { confirmDialog } from '../lib/confirm.js';
 import { escapeHtml } from '../lib/format.js';
 import { timeAgo } from '../lib/datetime.js';
 
@@ -26,6 +27,7 @@ const STATUS_LABEL = {
   'held-unsupported': ['badge-warn', 'Needs review'],
   error: ['badge-warn', 'Needs review'],
   'skipped-customized': ['badge-info', 'Skipped: you customized this file'],
+  'held-exists': ['badge-warn', 'Not added: the pack has its own'],
 };
 
 const fmt = (v) => (typeof v === 'string' ? v : JSON.stringify(v));
@@ -46,12 +48,12 @@ async function init(el) {
   const allOps = (preset) => preset.patches.flatMap((pa) => pa.ops.map((o) => ({ ...o, file: pa.file })));
 
   function summary(preset) {
-    const ops = [...allOps(preset), ...preset.settings];
+    const ops = [...allOps(preset), ...preset.settings, ...preset.files];
     const count = (...s) => ops.filter((o) => s.includes(o.status)).length;
     const parts = [];
     const done = count('applied', 'unchanged');
     if (done) parts.push(`<span class="badge badge-ok">${done} applied</span>`);
-    const review = count('held-expect', 'held-unsupported', 'error');
+    const review = count('held-expect', 'held-unsupported', 'held-exists', 'error');
     if (review) parts.push(`<span class="badge badge-warn">${review} needs review</span>`);
     if (count('held-missing')) parts.push('<span class="badge badge-info">Waiting for first start</span>');
     if (count('skipped-customized'))
@@ -81,6 +83,37 @@ async function init(el) {
     </li>`;
   }
 
+  function fileBlock(f) {
+    return `<details class="mt-1 text-xs"><summary class="cursor-pointer text-link">Show File</summary><pre class="mt-1 max-h-64 overflow-auto rounded-sm bg-inset p-2 font-mono text-xs whitespace-pre-wrap break-all text-ink-soft">${escapeHtml(f.preview)}</pre></details>`;
+  }
+
+  function fileRow(p, f) {
+    const [cls, label] = STATUS_LABEL[f.status] || ['badge-info', 'Not added yet'];
+    const held = f.status === 'held-exists';
+    const current = held
+      ? `<details class="mt-1 text-xs"><summary class="cursor-pointer text-link">Current File</summary><pre class="mt-1 max-h-64 overflow-auto rounded-sm bg-inset p-2 font-mono text-xs whitespace-pre-wrap break-all text-ink-soft">${escapeHtml(f.currentPreview || '')}</pre></details>`
+      : '';
+    const file = held
+      ? `<details class="mt-1 text-xs"><summary class="cursor-pointer text-link">Profile's Version</summary><pre class="mt-1 max-h-64 overflow-auto rounded-sm bg-inset p-2 font-mono text-xs whitespace-pre-wrap break-all text-ink-soft">${escapeHtml(f.preview)}</pre></details>`
+      : fileBlock(f);
+    const replace = held
+      ? `<button type="button" class="btn btn-sm mt-2" data-prof-replace data-preset="${escapeHtml(p.id)}" data-path="${escapeHtml(f.path)}" ${canEdit ? '' : 'disabled'}>Replace It</button>`
+      : '';
+    const backupNote =
+      f.hasBackup && (f.status === 'applied' || f.status === 'unchanged')
+        ? '<p class="mt-1 text-ink-faint">Turning this off puts back the previous file.</p>'
+        : '';
+    return `<li class="py-2 text-xs">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span class="text-ink">Adds</span>
+        <span class="font-mono break-all">${escapeHtml(f.path)}</span>
+        <span class="badge ${cls}">${label}</span>
+      </div>
+      ${f.message ? `<p class="mt-1 text-ink-faint">${escapeHtml(f.message)}</p>` : ''}
+      ${backupNote}${current}${file}${replace}
+    </li>`;
+  }
+
   function settingRow(st) {
     const [cls, label] = STATUS_LABEL[st.status] || ['badge-info', 'Not applied yet'];
     return `<li class="py-2 text-xs">
@@ -99,9 +132,13 @@ async function init(el) {
       ...allOps(p).map((o) => `${o.file}: ${o.path.join('.')} to ${fmt(o.value)}`),
       ...p.settings.map((st) => `${st.label}: ${fmt(st.value)}`),
     ];
-    return `<ul class="mt-1 space-y-0.5 font-mono text-xs break-all text-ink-faint">${lines
-      .map((l) => `<li>${escapeHtml(l)}</li>`)
-      .join('')}</ul>`;
+    const items = lines.map((l) => `<li>${escapeHtml(l)}</li>`);
+    for (const f of p.files) {
+      items.push(
+        `<li><span class="font-sans">Adds</span> ${escapeHtml(f.path)}<div class="font-sans">${fileBlock(f)}</div></li>`
+      );
+    }
+    return `<ul class="mt-1 space-y-0.5 font-mono text-xs break-all text-ink-faint">${items.join('')}</ul>`;
   }
 
   function reviewRow(p) {
@@ -171,7 +208,7 @@ async function init(el) {
       <div class="mt-2 flex flex-wrap gap-1">${summary(p)}</div>
       <details class="mt-2 text-xs" data-prof-changes ${open.has(p.id) ? 'open' : ''}>
         <summary class="cursor-pointer text-link">Show Changes</summary>
-        <ul class="mt-1 divide-y divide-line">${ops.map(opRow).join('')}${p.settings.map(settingRow).join('')}</ul>
+        <ul class="mt-1 divide-y divide-line">${ops.map(opRow).join('')}${p.settings.map(settingRow).join('')}${p.files.map((f) => fileRow(p, f)).join('')}</ul>
       </details>
     </div>`;
   }
@@ -291,7 +328,7 @@ async function init(el) {
       toast(
         enabled
           ? 'Preset turned on. It applies at the next start.'
-          : 'Preset turned off. Changes it already made stay until you change them or the pack updates the file.'
+          : 'Preset turned off. Files it added were removed. Other changes it made stay until you change them or the pack updates the file.'
       );
     } catch (err) {
       input.checked = !enabled; // revert
@@ -329,6 +366,30 @@ async function init(el) {
     if (e.target.closest('[data-prof-review]')) {
       reviewing = true;
       render();
+      return;
+    }
+    const replace = e.target.closest('[data-prof-replace]');
+    if (replace) {
+      const { preset, path } = replace.dataset;
+      const ok = await confirmDialog({
+        title: 'Replace this file?',
+        message: `The profile's version replaces ${path}. The current file is saved and comes back if you turn this preset off.`,
+        confirmLabel: 'Replace',
+        danger: true,
+      });
+      if (!ok) return;
+      await withBusy(replace, 'Replacing…', async () => {
+        try {
+          const { res, data } = await post('replace-file', { presetId: preset, path });
+          if (!res.ok || data.ok === false) throw res;
+          takeResult(data);
+          toast('File replaced. Restart the server to load it.');
+        } catch (err) {
+          toast(friendlyError(err instanceof Response ? err : null, { action: 'replace that file' }), {
+            kind: 'error',
+          });
+        }
+      });
       return;
     }
     const notNow = e.target.closest('[data-prof-notnow]');
