@@ -115,9 +115,11 @@ A pre-built multi-arch image (amd64 + arm64) is published to GHCR on two channel
 | `:v<version>`, e.g. `:v0.14.1` | Never (one per release).       | Pinning a release.                                        |
 | `:edge`                        | Every change merged to `main`. | Trying fixes before the next release. Expect rough edges. |
 | `:sha-<commit>`                | Never (one per merge).         | Pinning one exact `main` build.                           |
+| `:branch-<branch>`             | A maintainer builds a branch.  | Testing one unmerged change. Expect rough edges.          |
 
-For example `ghcr.io/mx772/minecraft-server-manager:edge`. Back up the data folder before moving
-between channels: an `:edge` build can run database migrations that an older release doesn't know.
+For example `ghcr.io/mx772/minecraft-server-manager:edge`. When a new image needs to update the
+panel's database, it saves a snapshot of the old one first, so you can move back to the previous
+image. See [Rolling back an update](docs/backups.md#rolling-back-an-update).
 
 On a fresh Linux server, the installer does the whole thing: installs Docker if it's missing, writes
 `/opt/msm`, starts the panel, and waits until it answers.

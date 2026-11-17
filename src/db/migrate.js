@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const db = require('./index');
 const logger = require('../logger')(path.basename(__filename));
+const { serializeError } = require('../utils/logSanitize');
 
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 
@@ -40,9 +41,15 @@ const LEGACY_MIGRATION_ALIASES = {
 /**
  * Apply every migration not yet recorded. `dir` exists so a test can point the
  * runner at a throwaway folder instead of touching the real migrations.
- * @param {{ dir?: string }} [opts]
+ *
+ * When an existing database is about to be changed, a `pre-upgrade` panel
+ * snapshot is taken first. Most installs update by pulling a new image and
+ * recreating the container, so there is no "before" step a user would run by
+ * hand; this is the last moment the old schema still exists, and it is what a
+ * rollback to the previous image restores.
+ * @param {{ dir?: string, snapshot?: boolean }} [opts]
  */
-function migrate({ dir = MIGRATIONS_DIR } = {}) {
+function migrate({ dir = MIGRATIONS_DIR, snapshot = true } = {}) {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -67,6 +74,34 @@ function migrate({ dir = MIGRATIONS_DIR } = {}) {
       );
     }
     seenNumbers.set(prefix, file);
+  }
+
+  // A fresh install has nothing worth saving; only snapshot an existing DB that
+  // has real (non-alias) migrations waiting.
+  const pending = files
+    .map((f) => f.replace(/\.js$/, ''))
+    .filter((v) => !applied.has(v) && !(LEGACY_MIGRATION_ALIASES[v] || []).some((old) => applied.has(old)));
+  if (snapshot && applied.size > 0 && pending.length > 0) {
+    const schemaFrom = [...applied].sort().at(-1) || null;
+    try {
+      // Mid-function require: storage/panelBackup pulls in config + db, keep
+      // this module loadable on its own.
+      const name = require('../storage/panelBackup').snapshotSync('pre-upgrade', {
+        schemaFrom,
+        schemaTo: pending.at(-1),
+        pending,
+      });
+      logger.info('Saved a panel snapshot before updating the database.', { snapshot: name, pending: pending.length });
+    } catch (err) {
+      // Don't refuse to boot over it (a full disk would then take the whole
+      // panel down), but make the missing rollback point loud.
+      logger.error(
+        'Could not save a panel snapshot before updating the database. Rolling back this update will not be possible.',
+        {
+          err: serializeError(err),
+        }
+      );
+    }
   }
 
   let count = 0;
