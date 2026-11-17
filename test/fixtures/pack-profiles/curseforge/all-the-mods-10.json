@@ -15,13 +15,28 @@
         {
           "file": "config/mekanism/general.toml",
           "ops": [
-            { "op": "set", "path": ["general", "radiation"], "value": false, "expect": true },
-            { "op": "set", "path": ["general", "mobCap"], "value": 40 }
+            {
+              "op": "set",
+              "path": ["general", "radiation"],
+              "value": false,
+              "expect": true
+            },
+            {
+              "op": "set",
+              "path": ["general", "mobCap"],
+              "value": 40
+            }
           ]
         },
         {
           "file": "config/late.toml",
-          "ops": [{ "op": "set", "path": ["late", "x"], "value": 1 }]
+          "ops": [
+            {
+              "op": "set",
+              "path": ["late", "x"],
+              "value": 1
+            }
+          ]
         }
       ]
     },
@@ -33,9 +48,25 @@
       "patches": [
         {
           "file": "world/serverconfig/ftbchunks.toml",
-          "ops": [{ "op": "set", "path": ["max_chunks"], "value": 25 }]
+          "ops": [
+            {
+              "op": "set",
+              "path": ["max_chunks"],
+              "value": 25
+            }
+          ]
         }
       ]
+    },
+    {
+      "id": "perf",
+      "title": "Performance",
+      "description": "Lowers distances and allows flight.",
+      "default": true,
+      "settings": {
+        "VIEW_DISTANCE": 6,
+        "ALLOW_FLIGHT": true
+      }
     }
   ]
 }

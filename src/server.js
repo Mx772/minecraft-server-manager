@@ -184,6 +184,8 @@ function startBackgroundServices(httpServer) {
   require('./integrations/discord').startEventBridge();
   require('./services/inventory').startSnapshotWatcher();
   require('./services/wizard').startOutreachWatcher();
+  // Tell users about suggested pack settings once per server. Deferred so boot is not held up.
+  setImmediate(() => require('./services/packProfiles').checkAllForSuggestions());
 
   // Daily maintenance: prune old analytics timeline rows + closed sessions so the
   // DB doesn't grow without bound over months of uptime. Runs shortly after boot,

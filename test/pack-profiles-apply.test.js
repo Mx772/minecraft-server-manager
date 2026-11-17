@@ -41,7 +41,7 @@ const setPack = (platform, ref, versionName) => {
 };
 const statuses = (out) => out.results.map((r) => `${r.file}#${r.op}:${r.status}`);
 
-async function fresh() {
+async function fresh({ optIn = true } = {}) {
   fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(path.join(root, 'config', 'mekanism'), { recursive: true });
   write('config/mekanism/general.toml', '[general]\n# comment\nradiation = true\nmobCap = 70\n');
@@ -49,11 +49,19 @@ async function fresh() {
   db.run('DELETE FROM server_customizations');
   db.run('DELETE FROM server_profile_presets');
   db.run('DELETE FROM server_profile_runs');
+  db.run('DELETE FROM server_profile_reviews');
   db.run('UPDATE servers SET env_json = ? WHERE id = ?', '{}', SID);
   // A start with no pack opens a new start cycle (clears the restart guard).
   db.run('DELETE FROM server_packs WHERE server_id = ?', SID);
   await packProfiles.apply(SID, { trigger: 'pre-start' });
   setPack('curseforge', 'all-the-mods-10', '8.6');
+  // Nothing applies until the user turns it on: the older tests turn the first preset on.
+  if (optIn) {
+    db.run(
+      "INSERT INTO server_profile_presets (server_id, profile_id, preset_id, enabled) VALUES (?, 'curseforge/all-the-mods-10', 'fewer-mobs', 1)",
+      SID
+    );
+  }
 }
 
 test.before(async () => {
@@ -95,14 +103,15 @@ test('matching: curseforge slug or project id, modrinth slug, version range', ()
   assert.equal(packProfiles.findProfile(null), null);
 });
 
-test('default-enabled semantics: defaults count until the user chooses', async () => {
-  await fresh();
+test('opt-in semantics: a default-true preset is not enabled until the user turns it on', async () => {
+  await fresh({ optIn: false });
   let { presets } = packProfiles.presetsFor(SID);
   assert.deepEqual(
-    presets.map((p) => [p.id, p.enabled]),
+    presets.map((p) => [p.id, p.default, p.enabled]),
     [
-      ['fewer-mobs', true],
-      ['world-rules', false],
+      ['fewer-mobs', true, false],
+      ['world-rules', false, false],
+      ['perf', true, false],
     ]
   );
   assert.equal(db.all('SELECT * FROM server_profile_presets').length, 0);
@@ -117,9 +126,151 @@ test('default-enabled semantics: defaults count until the user chooses', async (
   ({ presets } = packProfiles.presetsFor(SID));
   assert.deepEqual(
     presets.map((p) => p.enabled),
-    [false, true]
+    [false, true, false]
   );
   assert.throws(() => packProfiles.setPresets(SID, [{ presetId: 'nope', enabled: true }]), { status: 400 });
+});
+
+test('nothing applies automatically: hooks and Apply Now change nothing until enabled', async () => {
+  await fresh({ optIn: false });
+  const before = read('config/mekanism/general.toml');
+  for (const trigger of ['pre-start', 'post-upgrade', 'first-boot']) {
+    const out = await packProfiles.apply(SID, { trigger });
+    assert.equal(out.applied, 0);
+    assert.deepEqual(out.changedFiles, []);
+  }
+  const out = await packProfiles.apply(SID, { trigger: 'manual', withSettings: true });
+  assert.equal(out.applied, 0);
+  assert.equal(out.settingsChanged, 0);
+  assert.equal(read('config/mekanism/general.toml'), before);
+  assert.deepEqual(servers.getServer(SID).env, {});
+});
+
+test('review: new, then enable applies and marks everything seen', async () => {
+  await fresh({ optIn: false });
+  let g = packProfiles.presetsFor(SID);
+  assert.equal(g.review.state, 'new');
+  assert.deepEqual(g.review.newPresetIds, ['fewer-mobs', 'world-rules', 'perf']);
+  assert.ok(g.presets.every((p) => p.isNew));
+  const r = await packProfiles.review(SID, ['fewer-mobs', 'perf'], { actor: 'tester' });
+  assert.equal(r.out.applied, 2);
+  assert.equal(r.out.settingsChanged, 2);
+  assert.equal(r.review.state, 'reviewed');
+  assert.deepEqual(
+    r.presets.map((p) => [p.enabled, p.isNew]),
+    [
+      [true, false],
+      [false, false],
+      [true, false],
+    ]
+  );
+  assert.equal(read('config/mekanism/general.toml'), '[general]\n# comment\nradiation = false\nmobCap = 40\n');
+  assert.deepEqual(
+    r.presets[2].settings.map((s) => [s.key, s.status]),
+    [
+      ['VIEW_DISTANCE', 'applied'],
+      ['ALLOW_FLIGHT', 'applied'],
+    ]
+  );
+  await assert.rejects(packProfiles.review(SID, ['nope']), { status: 400 });
+});
+
+test('review: Not Now marks seen and applies nothing', async () => {
+  await fresh({ optIn: false });
+  const r = await packProfiles.review(SID, [], { actor: 'tester' });
+  assert.equal(r.out, null);
+  assert.equal(r.review.state, 'reviewed');
+  assert.equal(db.all('SELECT * FROM server_profile_presets').length, 0);
+  assert.equal(read('config/mekanism/general.toml'), '[general]\n# comment\nradiation = true\nmobCap = 70\n');
+  assert.deepEqual(servers.getServer(SID).env, {});
+});
+
+test('review: a profile that gains a preset prompts again with isNew', async () => {
+  await fresh({ optIn: false });
+  await packProfiles.review(SID, [], { actor: 'tester' });
+  db.run('UPDATE server_profile_reviews SET seen_preset_ids = \'["fewer-mobs","world-rules"]\'');
+  const g = packProfiles.presetsFor(SID);
+  assert.equal(g.review.state, 'new-presets');
+  assert.deepEqual(g.review.newPresetIds, ['perf']);
+  assert.deepEqual(
+    g.presets.map((p) => p.isNew),
+    [false, false, true]
+  );
+});
+
+test('checkForSuggestions notifies once per new preset set and applies nothing', async () => {
+  await fresh({ optIn: false });
+  const events = () => eventsOfType('profile-suggestions-available').sort((a, b) => a.id - b.id);
+  assert.equal(packProfiles.checkForSuggestions(SID), 3);
+  assert.equal(events().length, 1);
+  assert.equal(events()[0].summary, 'Suggested settings are available for All the Mods 10.');
+  assert.equal(packProfiles.checkForSuggestions(SID), 0);
+  assert.equal(events().length, 1);
+  // The profile gains presets later: one more event, counting only the new ones.
+  db.run('UPDATE server_profile_reviews SET notified_preset_ids = \'["fewer-mobs"]\'');
+  assert.equal(packProfiles.checkForSuggestions(SID), 2);
+  assert.equal(events().length, 2);
+  assert.equal(events()[1].summary, '2 new suggested settings are available for All the Mods 10.');
+  assert.equal(packProfiles.checkForSuggestions(SID), 0);
+  assert.equal(eventsOfType('profile-applied').length, 0);
+  assert.equal(read('config/mekanism/general.toml'), '[general]\n# comment\nradiation = true\nmobCap = 70\n');
+  // Answering the prompt means no later notice for what the user has seen.
+  await packProfiles.review(SID, [], { actor: 'tester' });
+  assert.equal(packProfiles.checkForSuggestions(SID), 0);
+  db.run('DELETE FROM server_packs WHERE server_id = ?', SID);
+  assert.equal(packProfiles.checkForSuggestions(SID), 0);
+});
+
+test('applyPack notifies about suggestions', async () => {
+  await fresh({ optIn: false });
+  const packs = require('../src/services/packs');
+  await packs.applyPack(
+    SID,
+    {
+      platform: 'curseforge',
+      projectRef: 'all-the-mods-10',
+      projectName: 'All the Mods 10',
+      versionId: 'v2',
+      versionName: '8.6',
+      env: {},
+    },
+    { force: true }
+  );
+  assert.equal(eventsOfType('profile-suggestions-available').length, 1);
+  db.run("UPDATE servers SET pending_recreate = 0, env_json = '{}' WHERE id = ?", SID);
+});
+
+test('settings presets: apply through updateServer, flag a rebuild, report unchanged on rerun', async () => {
+  await fresh({ optIn: false });
+  packProfiles.setPresets(SID, [{ presetId: 'perf', enabled: true }]);
+  // Hooks never apply settings.
+  await packProfiles.apply(SID, { trigger: 'pre-start' });
+  assert.deepEqual(servers.getServer(SID).env, {});
+  const out = await packProfiles.apply(SID, { trigger: 'manual', actor: 'tester', withSettings: true });
+  assert.equal(out.settingsChanged, 2);
+  assert.equal(out.rebuildNeeded, true);
+  assert.deepEqual(servers.getServer(SID).env, { VIEW_DISTANCE: '6', ALLOW_FLIGHT: 'true' });
+  assert.equal(servers.getServer(SID).pending_recreate, 1);
+  const shown = packProfiles.presetsFor(SID).presets[2].settings;
+  assert.deepEqual(
+    shown.map((s) => [s.key, s.label, s.value, s.status]),
+    [
+      ['VIEW_DISTANCE', 'View distance', 6, 'applied'],
+      ['ALLOW_FLIGHT', 'Allow Flight', true, 'applied'],
+    ]
+  );
+  // A hook run keeps the last settings results.
+  await packProfiles.apply(SID, { trigger: 'pre-start' });
+  assert.equal(packProfiles.presetsFor(SID).presets[2].settings[0].status, 'applied');
+  const again = await packProfiles.apply(SID, { trigger: 'manual', withSettings: true });
+  assert.equal(again.settingsChanged, 0);
+  assert.equal(again.rebuildNeeded, false);
+  assert.deepEqual(
+    again.settingResults.map((s) => s.status),
+    ['unchanged', 'unchanged']
+  );
+  assert.equal(packProfiles.presetsFor(SID).presets[2].settings[0].status, 'unchanged');
+  db.run("UPDATE servers SET pending_recreate = 0, env_json = '{}' WHERE id = ?", SID);
 });
 
 test('apply: applied, held-expect, missing file; one event, none on a no-op rerun', async () => {
@@ -283,6 +434,7 @@ test('routes: GET shape, presets, manual apply with restartNeeded, permissions',
   assert.deepEqual(r.json.profile, { id: 'curseforge/all-the-mods-10', name: 'All the Mods 10', notes: null });
   assert.equal(r.json.lastRun, null);
   assert.equal(r.json.presets[0].enabled, true);
+  assert.equal(r.json.review.state, 'new');
   assert.deepEqual(Object.keys(r.json.presets[0].patches[0].ops[0]).sort(), [
     'current',
     'expect',
@@ -296,23 +448,24 @@ test('routes: GET shape, presets, manual apply with restartNeeded, permissions',
   assert.equal((await app.req('POST', `${base}/apply`, { cookie: viewerCookie })).status, 403);
   assert.equal((await app.req('POST', `${base}/presets`, { cookie: viewerCookie, body: { changes: [] } })).status, 403);
 
+  db.run("UPDATE servers SET status = 'running' WHERE id = ?", SID);
   r = await app.req('POST', `${base}/presets`, {
     cookie: operatorCookie,
     body: { changes: [{ presetId: 'world-rules', enabled: true }] },
   });
   assert.equal(r.status, 200);
   assert.equal(r.json.presets[1].enabled, true);
+  // Turning a preset on applies it now.
+  assert.equal(r.json.applied, 2);
+  assert.equal(r.json.restartNeeded, true);
+  assert.deepEqual(r.json.changedFiles, ['config/mekanism/general.toml']);
   assert.equal(
     (await app.req('POST', `${base}/presets`, { cookie: adminCookie, body: { changes: [{}] } })).status,
     400
   );
 
-  db.run("UPDATE servers SET status = 'running' WHERE id = ?", SID);
   r = await app.req('POST', `${base}/apply`, { cookie: adminCookie });
   assert.equal(r.status, 200);
-  assert.equal(r.json.applied, 2);
-  assert.equal(r.json.restartNeeded, true);
-  assert.deepEqual(r.json.changedFiles, ['config/mekanism/general.toml']);
   assert.equal(r.json.lastRun.trigger, 'manual');
   r = await app.req('POST', `${base}/apply`, { cookie: adminCookie });
   assert.equal(r.json.restartNeeded, false);
@@ -335,4 +488,27 @@ test('onHealthy swallows a throwing apply', async (t) => {
     throw new Error('boom');
   });
   await assert.doesNotReject(packProfiles.onHealthy(SID, { restart: async () => {} }));
+});
+
+test('routes: review prompt applies only what was turned on and reports rebuildNeeded', async () => {
+  await fresh({ optIn: false });
+  const base = `/api/servers/${SID}/profile`;
+  assert.equal((await app.req('POST', `${base}/review`, { cookie: viewerCookie, body: { enable: [] } })).status, 403);
+  assert.equal(
+    (await app.req('POST', `${base}/review`, { cookie: adminCookie, body: { enable: ['nope'] } })).status,
+    400
+  );
+  let r = await app.req('POST', `${base}/review`, { cookie: adminCookie, body: { enable: ['perf'] } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.rebuildNeeded, true);
+  assert.equal(r.json.settingsChanged, 2);
+  assert.equal(r.json.review.state, 'reviewed');
+  assert.deepEqual(
+    r.json.presets.map((p) => p.enabled),
+    [false, false, true]
+  );
+  assert.equal(r.json.presets[2].settings[0].status, 'applied');
+  r = await app.req('GET', base, { cookie: viewerCookie });
+  assert.equal(r.json.review.state, 'reviewed');
+  db.run("UPDATE servers SET pending_recreate = 0, env_json = '{}' WHERE id = ?", SID);
 });

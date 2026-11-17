@@ -1,8 +1,10 @@
 # Pack profiles
 
 A pack profile is recommended server setup for one modpack: small, reviewed changes to its mod
-config files (fewer mob spawns, a safer chunk-loading limit, and so on). The panel applies the
-presets a user turns on every time their server starts, and again after a pack upgrade.
+config files (fewer mob spawns, a safer chunk-loading limit, and so on). The panel never
+applies a preset on its own: it notices that a pack has suggestions and asks. Only presets the user
+turns on are applied (config changes every time the server starts and after a pack upgrade;
+server settings once, when the user turns the preset on or chooses Apply Now).
 
 Profiles are data, not code. They can only change values in config files.
 
@@ -49,7 +51,12 @@ validates against the same rules at startup and skips (with a logged warning) an
 - `versions` is optional. It compares the pinned pack version name as a dotted number (`8.6`,
   `2.7.4`) with `>=`, `>`, `<=`, `<`, and `=`. Separate terms with spaces; all must hold. A pack
   whose version name is not a plain dotted number only matches profiles with no `versions`.
-- `default` decides whether a preset is on until the user changes it.
+- `default` only decides whether a preset is pre-ticked in the review prompt. It never turns a
+  preset on by itself.
+- A preset has `patches` (config file changes), `settings`, or both. `settings` is an object of
+  server settings, such as `{ "VIEW_DISTANCE": 8, "ALLOW_FLIGHT": true }`. Only these keys are
+  accepted: `VIEW_DISTANCE`, `SIMULATION_DISTANCE`, `ALLOW_FLIGHT`, `MAX_TICK_TIME`, and
+  `USE_AIKAR_FLAGS`. Each value is checked against the panel's own limits for that setting.
 - Ops: `set` (change one value), `append` (add a list entry), `removeFrom` (remove a list entry).
   `path` is the key path inside the file. Values are strings, numbers, booleans, or lists of those.
 - `expect` records the value the author saw. If the file holds something else, the panel holds the

@@ -62,7 +62,7 @@
             "type": "boolean"
           },
           "patches": {
-            "minItems": 1,
+            "default": [],
             "maxItems": 50,
             "type": "array",
             "items": {
@@ -323,6 +323,16 @@
               },
               "required": ["file", "ops"],
               "additionalProperties": false
+            }
+          },
+          "settings": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "enum": ["VIEW_DISTANCE", "SIMULATION_DISTANCE", "ALLOW_FLIGHT", "MAX_TICK_TIME", "USE_AIKAR_FLAGS"]
+            },
+            "additionalProperties": {
+              "type": ["number", "boolean"]
             }
           }
         },

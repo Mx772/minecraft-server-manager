@@ -52,6 +52,7 @@ const EVENT_MAP = {
   'update-applied': ['update', 'updates'],
   'update-rolled-back': ['update', 'updates'],
   'update-failed': ['update', 'updates'],
+  'profile-suggestions-available': ['update', 'updates'],
   'player-ban': ['player', 'players'],
   'player-kick': ['player', 'players'],
   // Things that silently left a server broken before nothing forwarded them.
@@ -374,6 +375,7 @@ function titleFor(type) {
     'update-applied': 'Update applied',
     'update-rolled-back': 'Update rolled back',
     'update-failed': 'Update failed',
+    'profile-suggestions-available': 'Suggested settings available',
     'player-ban': 'Player banned',
     'player-kick': 'Player kicked',
     oom: 'Out of memory',

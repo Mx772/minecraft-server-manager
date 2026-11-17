@@ -163,3 +163,33 @@ test('extractVersion pulls the last dotted number out of a pinned name', () => {
   assert.equal(version.satisfies('latest', '>=1'), false);
   assert.equal(version.satisfies('latest', undefined), true);
 });
+
+test('settings presets: allowlisted keys with catalog-valid values only', () => {
+  const withSettings = (settings, patches) => {
+    const p = good();
+    p.presets = [{ id: 'x', title: 'X', description: 'D.', default: true, ...(patches ? { patches } : {}), settings }];
+    return profile.safeParse(p);
+  };
+  assert.ok(withSettings({ VIEW_DISTANCE: 8, MAX_TICK_TIME: -1, USE_AIKAR_FLAGS: true }).success);
+  assert.ok(!withSettings({ MOTD: 'hi' }).success);
+  assert.ok(!withSettings({ VIEW_DISTANCE: 99 }).success);
+  assert.ok(!withSettings({ VIEW_DISTANCE: 8.5 }).success);
+  assert.ok(!withSettings({ ALLOW_FLIGHT: 'true' }).success);
+  assert.ok(!withSettings({ MAX_TICK_TIME: -5 }).success);
+  assert.ok(!withSettings({}).success);
+});
+
+test('the bundled All the Mods 10 profile loads with its settings preset', () => {
+  const { profiles, invalid } = loader.loadDir(loader.DEFAULT_DIR);
+  assert.deepEqual(invalid, []);
+  const atm = profiles.find((p) => p.id === 'curseforge/all-the-mods-10');
+  const preset = atm.presets.find((p) => p.id === 'server-pack-settings');
+  assert.equal(preset.default, true);
+  assert.deepEqual(preset.settings, {
+    VIEW_DISTANCE: 8,
+    SIMULATION_DISTANCE: 5,
+    ALLOW_FLIGHT: true,
+    MAX_TICK_TIME: 180000,
+    USE_AIKAR_FLAGS: true,
+  });
+});

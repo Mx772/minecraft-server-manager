@@ -8,6 +8,7 @@
 const { z } = require('zod');
 const { detectFormat } = require('../configPatch');
 const { isValidRange } = require('./version');
+const { ALLOWED_SETTING_KEYS, settingProblem } = require('./settings');
 
 const PLATFORMS = ['curseforge', 'modrinth', 'ftb', 'gtnh'];
 const ROOTS = ['config', 'defaultconfigs', 'world/serverconfig'];
@@ -65,14 +66,30 @@ const patch = z
     }
   });
 
-const preset = z.strictObject({
-  id: z.string().regex(ID_RE),
-  title: z.string().min(1).max(80),
-  description: z.string().min(1).max(500),
-  why: z.string().max(500).optional(),
-  default: z.boolean(),
-  patches: z.array(patch).min(1).max(50),
-});
+const settings = z
+  .partialRecord(z.enum(ALLOWED_SETTING_KEYS), z.union([z.number().finite(), z.boolean()]))
+  .superRefine((s, ctx) => {
+    for (const [key, val] of Object.entries(s)) {
+      const problem = settingProblem(key, val);
+      if (problem) ctx.addIssue({ code: 'custom', path: [key], message: `${key} ${problem}.` });
+    }
+  });
+
+const preset = z
+  .strictObject({
+    id: z.string().regex(ID_RE),
+    title: z.string().min(1).max(80),
+    description: z.string().min(1).max(500),
+    why: z.string().max(500).optional(),
+    default: z.boolean(),
+    patches: z.array(patch).max(50).default([]),
+    settings: settings.optional(),
+  })
+  .superRefine((p, ctx) => {
+    if (p.patches.length === 0 && (!p.settings || Object.keys(p.settings).length === 0)) {
+      ctx.addIssue({ code: 'custom', path: ['patches'], message: 'A preset needs patches or settings.' });
+    }
+  });
 
 const profile = z
   .strictObject({

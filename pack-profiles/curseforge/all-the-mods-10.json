@@ -1,0 +1,70 @@
+{
+  "id": "curseforge/all-the-mods-10",
+  "platform": "curseforge",
+  "slug": "all-the-mods-10",
+  "name": "All the Mods 10",
+  "versions": ">=8.6 <9",
+  "notes": "Settings checked against the 8.6 server files. Nothing applies until you turn it on. The pack recommends about 8 GB of memory.",
+  "presets": [
+    {
+      "id": "server-pack-settings",
+      "title": "Server Pack Settings",
+      "description": "The values All the Mods 10's official server files use for view distance, simulation distance, flight, the tick watchdog, and JVM tuning.",
+      "why": "The official server pack's start script sets these, but installing the pack from CurseForge doesn't. They keep a heavy pack running smoothly.",
+      "default": true,
+      "settings": {
+        "VIEW_DISTANCE": 8,
+        "SIMULATION_DISTANCE": 5,
+        "ALLOW_FLIGHT": true,
+        "MAX_TICK_TIME": 180000,
+        "USE_AIKAR_FLAGS": true
+      }
+    },
+    {
+      "id": "no-computer-internet",
+      "title": "Keep In-Game Computers Offline",
+      "description": "Stops ComputerCraft computers from making web requests or opening websockets from your server.",
+      "why": "ComputerCraft's own rules already block your local network, but in-game computers can still reach the internet from the server's connection. The mod's authors recommend leaving this on, so only use it if you don't want computers online at all. It also disables the pastebin and wget programs.",
+      "default": false,
+      "patches": [
+        {
+          "file": "config/computercraft-server.toml",
+          "ops": [
+            {
+              "op": "set",
+              "path": ["http", "enabled"],
+              "value": false,
+              "expect": true
+            },
+            {
+              "op": "set",
+              "path": ["http", "websocket_enabled"],
+              "value": false,
+              "expect": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "no-mekanism-radiation",
+      "title": "Turn Off Mekanism Radiation",
+      "description": "Disables Mekanism's worldwide radiation effects.",
+      "why": "Radiation from a careless reactor setup can make a shared base unusable for everyone. Many community servers turn it off.",
+      "default": false,
+      "patches": [
+        {
+          "file": "config/Mekanism/general.toml",
+          "ops": [
+            {
+              "op": "set",
+              "path": ["radiation", "enabled"],
+              "value": false,
+              "expect": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
