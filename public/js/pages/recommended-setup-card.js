@@ -1,5 +1,7 @@
 // Recommended Setup card on the per-server Mods tab: pack profile presets the
 // panel applies before each start. Hidden when no profile matches the pack.
+// Suggestions are opt-in: a new profile shows a prompt, and nothing is applied
+// until the user reviews it and turns settings on.
 import { toast } from '../lib/toast.js';
 import { friendlyError } from '../lib/errors.js';
 import { withBusy } from '../lib/loading.js';
@@ -37,12 +39,14 @@ async function init(el) {
   const base = `/api/servers/${encodeURIComponent(serverId)}/profile`;
   let state = null;
   let restartNeeded = false;
+  let rebuildNeeded = false;
+  let reviewing = false; // the checklist is open
   const open = new Set(); // preset ids whose changes are expanded
 
   const allOps = (preset) => preset.patches.flatMap((pa) => pa.ops.map((o) => ({ ...o, file: pa.file })));
 
   function summary(preset) {
-    const ops = allOps(preset);
+    const ops = [...allOps(preset), ...preset.settings];
     const count = (...s) => ops.filter((o) => s.includes(o.status)).length;
     const parts = [];
     const done = count('applied', 'unchanged');
@@ -77,12 +81,85 @@ async function init(el) {
     </li>`;
   }
 
+  function settingRow(st) {
+    const [cls, label] = STATUS_LABEL[st.status] || ['badge-info', 'Not applied yet'];
+    return `<li class="py-2 text-xs">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span class="text-ink">${escapeHtml(st.label)}:</span>
+        <span class="font-mono break-all">${escapeHtml(fmt(st.value))}</span>
+        <span class="badge ${cls}">${label}</span>
+      </div>
+      ${st.message ? `<p class="mt-1 text-ink-faint">${escapeHtml(st.message)}</p>` : ''}
+    </li>`;
+  }
+
+  // What a preset changes, as plain lines, for the review checklist.
+  function changeLines(p) {
+    const lines = [
+      ...allOps(p).map((o) => `${o.file}: ${o.path.join('.')} to ${fmt(o.value)}`),
+      ...p.settings.map((st) => `${st.label}: ${fmt(st.value)}`),
+    ];
+    return `<ul class="mt-1 space-y-0.5 font-mono text-xs break-all text-ink-faint">${lines
+      .map((l) => `<li>${escapeHtml(l)}</li>`)
+      .join('')}</ul>`;
+  }
+
+  function reviewRow(p) {
+    return `<div class="py-3" data-prof-review-row="${escapeHtml(p.id)}">
+      <label class="flex cursor-pointer items-start gap-3">
+        <input type="checkbox" class="msm-check mt-0.5" data-prof-pick="${escapeHtml(p.id)}" ${p.default ? 'checked' : ''}>
+        <span class="min-w-0">
+          <span class="block text-sm font-medium text-ink">${escapeHtml(p.title)}</span>
+          <span class="mt-1 block max-w-prose text-xs leading-relaxed text-ink-faint">${escapeHtml(p.description)}</span>
+        </span>
+      </label>
+      <div class="ml-7">
+        ${p.why ? `<details class="mt-2 text-xs"><summary class="cursor-pointer text-link">Why</summary><p class="mt-1 max-w-prose leading-relaxed text-ink-faint">${escapeHtml(p.why)}</p></details>` : ''}
+        <details class="mt-2 text-xs"><summary class="cursor-pointer text-link">What It Changes</summary>${changeLines(p)}</details>
+      </div>
+    </div>`;
+  }
+
+  function reviewTargets() {
+    const all = state.presets;
+    return state.review?.state === 'new-presets' ? all.filter((p) => p.isNew) : all;
+  }
+
+  function promptHtml() {
+    const { profile, review } = state;
+    const name = escapeHtml(profile.name);
+    const n = review.newPresetIds.length;
+    const headline =
+      review.state === 'new'
+        ? `Detected ${name}. Suggested settings are available.`
+        : `${n} new suggested ${n === 1 ? 'setting' : 'settings'} for ${name}.`;
+    if (!reviewing) {
+      return `<div class="notice notice-info mb-4" data-prof-prompt>
+        <p class="font-semibold">${headline}</p>
+        <p class="mt-1 text-xs">Nothing changes until you turn them on.</p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <button type="button" class="btn btn-primary btn-sm" data-prof-review ${canEdit ? '' : 'disabled'}>Review Suggestions</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-prof-notnow ${canEdit ? '' : 'disabled'}>Not Now</button>
+        </div>
+      </div>`;
+    }
+    return `<div class="notice notice-info mb-4" data-prof-prompt>
+      <p class="font-semibold">${headline}</p>
+      <p class="mt-1 text-xs">Nothing changes until you turn them on.</p>
+      <div class="mt-2 divide-y divide-line" data-prof-checklist>${reviewTargets().map(reviewRow).join('')}</div>
+      <div class="mt-3 flex flex-wrap gap-2">
+        <button type="button" class="btn btn-primary btn-sm" data-prof-enable disabled>Enable Selected</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-prof-notnow>Not Now</button>
+      </div>
+    </div>`;
+  }
+
   function presetRow(p) {
     const ops = allOps(p);
     return `<div class="py-3" data-prof-preset="${escapeHtml(p.id)}">
       <label class="flex cursor-pointer items-start justify-between gap-4">
         <span class="min-w-0">
-          <span class="block text-sm font-medium text-ink">${escapeHtml(p.title)}</span>
+          <span class="block text-sm font-medium text-ink">${escapeHtml(p.title)}${p.isNew ? ' <span class="badge badge-info">New</span>' : ''}</span>
           <span class="mt-1 block max-w-prose text-xs leading-relaxed text-ink-faint">${escapeHtml(p.description)}</span>
         </span>
         <span class="msm-toggle mt-0.5 shrink-0">
@@ -94,7 +171,7 @@ async function init(el) {
       <div class="mt-2 flex flex-wrap gap-1">${summary(p)}</div>
       <details class="mt-2 text-xs" data-prof-changes ${open.has(p.id) ? 'open' : ''}>
         <summary class="cursor-pointer text-link">Show Changes</summary>
-        <ul class="mt-1 divide-y divide-line">${ops.map(opRow).join('')}</ul>
+        <ul class="mt-1 divide-y divide-line">${ops.map(opRow).join('')}${p.settings.map(settingRow).join('')}</ul>
       </details>
     </div>`;
   }
@@ -114,20 +191,50 @@ async function init(el) {
     }
     el.classList.remove('hidden');
     const { profile, presets } = state;
-    const restart = restartNeeded
+    const rebuild = rebuildNeeded
       ? `<div class="notice notice-warn mb-3 flex flex-wrap items-center justify-between gap-2">
+          <span>Rebuild the server to use the new server settings.</span>
+          ${canPower ? `<button type="button" class="btn btn-sm" data-server-action="recreate" data-server-id="${escapeHtml(serverId)}" data-server-name="${escapeHtml(serverName)}">Rebuild Now</button>` : ''}
+        </div>`
+      : '';
+    const restart =
+      restartNeeded && !rebuildNeeded
+        ? `<div class="notice notice-warn mb-3 flex flex-wrap items-center justify-between gap-2">
           <span>Restart the server to load the new settings.</span>
           ${canPower ? `<button type="button" class="btn btn-sm" data-server-action="restart" data-server-id="${escapeHtml(serverId)}" data-server-name="${escapeHtml(serverName)}">Restart</button>` : ''}
         </div>`
-      : '';
-    body.innerHTML = `${restart}
-      <p class="mb-2 max-w-prose text-xs leading-relaxed text-ink-faint">Settings the ${escapeHtml(profile.name)} profile recommends for servers. Your own customized files always win.</p>
+        : '';
+    const reviewState = state.review?.state;
+    const prompting = reviewState === 'new' || reviewState === 'new-presets';
+    const list =
+      reviewState === 'new'
+        ? ''
+        : `<p class="mb-2 max-w-prose text-xs leading-relaxed text-ink-faint">Settings the ${escapeHtml(profile.name)} profile suggests for servers. Your own customized files always win.</p>
       ${profile.notes ? `<p class="mb-2 max-w-prose text-xs leading-relaxed text-ink-faint">${escapeHtml(profile.notes)}</p>` : ''}
       <div class="divide-y divide-line">${presets.map(presetRow).join('')}</div>
       <div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p class="text-xs text-ink-faint">${escapeHtml(footer())}</p>
         <button type="button" class="btn btn-primary btn-sm" data-prof-apply ${canEdit ? '' : 'disabled'}>Apply Now</button>
       </div>`;
+    body.innerHTML = `${rebuild}${restart}${prompting ? promptHtml() : ''}${list}`;
+    if (reviewing) syncEnable();
+  }
+
+  function syncEnable() {
+    const enable = body.querySelector('[data-prof-enable]');
+    if (!enable) return;
+    const any = [...body.querySelectorAll('[data-prof-pick]')].some((c) => c.checked);
+    enable.disabled = !any || !canEdit;
+    // With nothing ticked there is nothing to enable, so only Not Now remains.
+    enable.classList.toggle('hidden', !any);
+  }
+
+  function takeResult(data) {
+    state = data;
+    rebuildNeeded = !!data.rebuildNeeded;
+    restartNeeded = !!data.restartNeeded;
+    reviewing = false;
+    render();
   }
 
   async function post(path, payload) {
@@ -147,6 +254,11 @@ async function init(el) {
       if (!res.ok || data.ok === false) throw new Error('load failed');
       state = data;
       render();
+      // The Overview hint links to #recommended-setup, but the card is hidden until
+      // this fetch reveals it, so the browser's own anchor jump has nothing to land on.
+      if (location.hash === '#recommended-setup' && !el.classList.contains('hidden')) {
+        el.scrollIntoView({ block: 'start' });
+      }
     } catch {
       el.classList.remove('hidden');
       body.innerHTML =
@@ -175,8 +287,7 @@ async function init(el) {
     try {
       const { res, data } = await post('presets', { changes: [{ presetId, enabled }] });
       if (!res.ok || data.ok === false) throw res;
-      state = data;
-      render();
+      takeResult(data);
       toast(
         enabled
           ? 'Preset turned on. It applies at the next start.'
@@ -191,16 +302,49 @@ async function init(el) {
     }
   });
 
+  body.addEventListener('change', (e) => {
+    if (e.target.closest('[data-prof-pick]')) syncEnable();
+  });
+
+  async function submitReview(btn, ids) {
+    await withBusy(btn, ids.length ? 'Enabling…' : 'Saving…', async () => {
+      try {
+        const { res, data } = await post('review', { enable: ids });
+        if (!res.ok || data.ok === false) throw res;
+        takeResult(data);
+        toast(
+          ids.length
+            ? `Turned on ${ids.length} suggested ${ids.length === 1 ? 'setting' : 'settings'}.`
+            : 'Okay. You can turn suggestions on any time from this card.'
+        );
+      } catch (err) {
+        toast(friendlyError(err instanceof Response ? err : null, { action: 'save your choice' }), {
+          kind: 'error',
+        });
+      }
+    });
+  }
+
   body.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-prof-review]')) {
+      reviewing = true;
+      render();
+      return;
+    }
+    const notNow = e.target.closest('[data-prof-notnow]');
+    if (notNow) return submitReview(notNow, []);
+    const enable = e.target.closest('[data-prof-enable]');
+    if (enable) {
+      const ids = [...body.querySelectorAll('[data-prof-pick]:checked')].map((c) => c.dataset.profPick);
+      return ids.length ? submitReview(enable, ids) : undefined;
+    }
     const btn = e.target.closest('[data-prof-apply]');
     if (!btn) return;
     await withBusy(btn, 'Applying…', async () => {
       try {
         const { res, data } = await post('apply');
         if (!res.ok || data.ok === false) throw res;
-        state = data;
-        restartNeeded = !!data.restartNeeded;
-        render();
+        takeResult(data);
         toast(
           data.applied > 0
             ? `Applied ${data.applied} recommended ${data.applied === 1 ? 'setting' : 'settings'}.`

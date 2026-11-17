@@ -52,12 +52,18 @@ The panel keeps a copy of each file in a `customizations/` folder in the server'
 
 ## Recommended setup (pack profiles)
 
-Some packs have a **profile**: a short list of reviewed config changes, such as fewer mob spawns or a safer chunk-loading limit, that suit servers better than the pack's defaults. When a server's pinned pack has a profile, the **Recommended Setup** card appears on the server's **Mods** tab, above **Customizations**.
+Some packs have a **profile**: a short list of reviewed suggestions, such as fewer mob spawns, a safer chunk-loading limit, or a server setting, that suit servers better than the pack's defaults. When a server's pinned pack has a profile, the **Recommended Setup** card appears on the server's **Mods** tab, above **Customizations**.
 
-Profiles ship with the panel. Contributions are welcome as pull requests to the `pack-profiles/` folder; the format is described in [`pack-profiles/README.md`](../pack-profiles/README.md). A profile can only change values in config files.
+Profiles ship with the panel. Contributions are welcome as pull requests to the `pack-profiles/` folder; the format is described in [`pack-profiles/README.md`](../pack-profiles/README.md). A profile can change values in config files and a few server settings.
 
-- **Presets:** a profile is split into presets, each a small group of related changes with a description and a **Why**. Turn each one on or off with its switch. **Show Changes** lists every file and setting a preset touches, with the value it sets.
-- **When they apply:** the panel applies your enabled presets before each start, again after a pack update, and after the first start (when the pack's config files first exist). **Apply Now** applies them immediately; if the server is running, restart it to load the changes.
+Suggestions are opt-in. The panel never applies them on its own.
+
+- **Detection prompt:** when the panel detects a pack with a profile, the card shows "Detected <pack>. Suggested settings are available." and the server's **Overview** tab links to it. Nothing changes until you turn suggestions on.
+- **Review Suggestions / Not Now:** **Review Suggestions** lists every preset with a checkbox, a **Why**, and the files and settings it changes. Presets the profile author recommends are pre-ticked, which only means they are the suggested choice: nothing is applied until you click **Enable Selected**. **Not Now** turns nothing on and marks the suggestions as seen. You can turn presets on any time from the card.
+- **Presets:** each preset is a small group of related changes. Turn each one on or off with its switch. **Show Changes** lists every file and setting a preset touches, with the value it sets.
+- **Server settings need a rebuild:** presets that change server settings, such as memory or the Java version, are saved right away but only take effect after you rebuild the server. The card offers **Rebuild Now** when that is needed. Config changes only need a restart.
+- **When config presets apply:** once enabled, config changes are applied again before each start, after a pack update, and after the first start (when the pack's config files first exist). **Apply Now** applies them immediately.
+- **New suggestions:** when a panel update adds suggestions to a profile you have already reviewed, the card shows a prompt for just the new ones, marked **New**. The panel adds a history entry, and sends a Discord notification if those are on. Nothing is applied until you enable it.
 - **Turning one off:** this stops future changes. It does not undo what the preset already did. Those values stay until you change them or the pack updates the file.
 - **Needs review:** the panel holds back a change when it is not safe to make. This happens when the pack's value is no longer the one the profile was written against, or when the file's format is one the panel cannot edit safely. Nothing is written for that setting. Check the file and the message on the card, then adjust it yourself if you want it.
 - **Waiting for first start:** the file does not exist until the server has started once. The change applies after that start.

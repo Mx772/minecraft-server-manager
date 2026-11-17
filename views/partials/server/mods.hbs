@@ -115,8 +115,8 @@
 
   {{#if server.pack}}
     {{! Loaded by recommended-setup-card.js from /api/servers/:id/profile; stays hidden when no profile matches the pack. }}
-    <div class="mt-6 hidden" data-prof-card="{{server.id}}" data-server-name="{{server.name}}" data-can-edit="{{#if perms.settings}}true{{else}}false{{/if}}" data-can-power="{{#if perms.power}}true{{else}}false{{/if}}">
-      {{#> settings/card heading="Recommended Setup" desc="Settings this pack's profile recommends for servers. Your own customized files always win."}}
+    <div class="mt-6 hidden" id="recommended-setup" data-prof-card="{{server.id}}" data-server-name="{{server.name}}" data-can-edit="{{#if perms.settings}}true{{else}}false{{/if}}" data-can-power="{{#if perms.power}}true{{else}}false{{/if}}">
+      {{#> settings/card heading="Recommended Setup" desc="Settings this pack's profile suggests for servers. Nothing changes until you turn it on. Your own customized files always win."}}
         <div data-prof-body><p class="text-sm text-ink-faint">Loading…</p></div>
       {{/settings/card}}
     </div>
