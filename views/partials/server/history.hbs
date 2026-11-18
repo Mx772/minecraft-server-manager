@@ -14,7 +14,12 @@
 
 {{#if crashReports.length}}
   <div class="card mb-4 border-danger/40">
-    <div class="border-b border-line p-3 font-semibold text-danger">{{{icon 'flame' 'size-4'}}} Crash Reports</div>
+    <div class="flex flex-wrap items-center gap-2 border-b border-line p-3">
+      <span class="font-semibold text-danger">{{{icon 'flame' 'size-4'}}} Crash Reports</span>
+      {{#if server.crashesUnread}}{{#if perms.files}}
+        <button class="btn btn-ghost btn-sm ml-auto" data-crash-mark-all>{{{icon 'check-check' 'size-3.5'}}} Mark All Read</button>
+      {{/if}}{{/if}}
+    </div>
     <div class="divide-y divide-line">
       {{#each crashReports}}
         <div class="p-3" data-crash-card data-crash-id="{{id}}" data-crash-file="{{file}}" {{#if mclogsUrl}}data-crash-mclogs="{{mclogsUrl}}"{{/if}}>
