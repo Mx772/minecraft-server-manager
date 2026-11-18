@@ -64,6 +64,18 @@ router.get(
   })
 );
 
+// Mark every report for this server as read (clears the "new crashes" badge).
+// A write, so the mount's requireCapForWrites('files') gates it.
+router.post(
+  '/viewed',
+  asyncHandler((req, res, next) => {
+    const serverId = serverIdSchema.parse(req.params.id);
+    const marked = crashes.markAllViewed(serverId);
+    logger.info('Marked crash reports as read.', { serverId, marked, actor: req.user.username });
+    res.json({ ok: true, marked });
+  })
+);
+
 // Bulk delete - everything older than ?olderThanDays=N for this server.
 router.delete(
   '/',
@@ -79,10 +91,12 @@ router.get(
   '/:crashId/text',
   asyncHandler(async (req, res, next) => {
     const row = ownedCrash(req);
-    const text = await crashes.getCrashText(row.server_id, row.filename);
     // Opening the report counts as reading it, but that is a write to the
     // report's state, so only someone holding `files` here clears the badge.
+    // Marked before the read so a report whose file has since been removed
+    // can still be acknowledged instead of staying "new" forever.
     if (permissions.can(req.user, row.server_id, 'files')) crashes.markViewed(row.id);
+    const text = await crashes.getCrashText(row.server_id, row.filename);
     res.type('text/plain').send(text);
   })
 );

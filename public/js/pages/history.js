@@ -28,6 +28,21 @@ function init(serverId) {
     });
   }
 
+  const markAll = document.querySelector('[data-crash-mark-all]');
+  markAll?.addEventListener('click', () =>
+    withBusy(markAll, async () => {
+      try {
+        const res = await fetch(`/api/servers/${serverId}/crashes/viewed`, { method: 'POST' });
+        if (!res.ok) throw new Error(friendlyError(res, { action: 'mark the crash reports as read' }));
+        document.querySelectorAll('[data-crash-card]').forEach(dropNewBadge);
+        markAll.remove();
+        toast('Crash reports marked as read.');
+      } catch (err) {
+        toast(err.message, { kind: 'error' });
+      }
+    })
+  );
+
   // ---- Event list filters ------------------------------------------------
   const search = document.getElementById('hist-search');
   const typeSel = document.getElementById('hist-type');
@@ -107,8 +122,20 @@ function init(serverId) {
 
 async function fetchText(serverId, crash) {
   const res = await fetch(`/api/servers/${serverId}/crashes/${crash.id}/text`);
-  if (!res.ok) throw new Error(friendlyError(res, { action: 'load that crash report' }));
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const err = new Error(data.error || friendlyError(res, { action: 'load that crash report' }));
+    err.status = res.status;
+    throw err;
+  }
   return res.text();
+}
+
+/** Remove a crash card's "new" badge once the server has marked it read. */
+function dropNewBadge(card) {
+  card?.querySelectorAll('.badge').forEach((b) => {
+    if (b.textContent.trim() === 'new') b.remove();
+  });
 }
 
 async function copyToClipboard(text, message) {
@@ -271,14 +298,14 @@ async function openViewer(serverId, crash, card) {
   try {
     text = await fetchText(serverId, crash);
   } catch (err) {
+    // A 404 means the file is gone, but the server still marked the report read.
+    if (err.status === 404) dropNewBadge(card);
     toast(err.message, { kind: 'error' });
     return;
   }
 
   // Server marked it viewed as a side effect of the text fetch - drop the badge.
-  card?.querySelectorAll('.badge').forEach((b) => {
-    if (b.textContent.trim() === 'new') b.remove();
-  });
+  dropNewBadge(card);
 
   openModal({
     title: crash.filename,

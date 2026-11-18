@@ -14,6 +14,7 @@ const { recordEvent } = require('../events');
 const logger = require('../logger')('crashes');
 const { serializeError } = require('../utils/logSanitize');
 const { makeFailureThrottle } = require('../logger');
+const httpError = require('../utils/httpError');
 
 const scanAllThrottle = makeFailureThrottle();
 
@@ -339,12 +340,34 @@ async function getCrashText(serverId, filename) {
     err.status = 404;
     throw err;
   }
-  // Reports are 100KB+ - read async so a view never blocks the event loop.
-  return fsp.readFile(absPathFor(serverId, filename), 'utf8');
+  return readReportText(serverId, filename);
+}
+
+/**
+ * Read a report file. The row outlives its file when the crash-reports folder
+ * is cleaned out (by hand, a pack reinstall, or a server rebuild), which is not
+ * a panel fault, so a missing file is a friendly 404 rather than a redacted 500.
+ * Reports are 100KB+, so this reads async and never blocks the event loop.
+ */
+async function readReportText(serverId, filename) {
+  try {
+    return await fsp.readFile(absPathFor(serverId, filename), 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw httpError(404, 'This crash report file is no longer in the server folder.');
+    }
+    throw err;
+  }
 }
 
 function markViewed(crashId) {
   db.run('UPDATE crash_reports SET viewed = 1 WHERE id = ?', crashId);
+}
+
+/** Mark every unread report for a server as read. Returns how many changed. */
+function markAllViewed(serverId) {
+  const { changes } = db.run('UPDATE crash_reports SET viewed = 1 WHERE server_id = ? AND viewed = 0', serverId);
+  return Number(changes) || 0;
 }
 
 /**
@@ -360,7 +383,7 @@ async function shareCrash(crashId, { actor = 'system' } = {}) {
     throw err;
   }
   if (row.mclogs_url) return { id: row.mclogs_id, url: row.mclogs_url, alreadyShared: true };
-  const text = await fsp.readFile(absPathFor(row.server_id, row.filename), 'utf8');
+  const text = await readReportText(row.server_id, row.filename);
   const paste = await require('../integrations/mclogs').uploadLog(text);
   db.run('UPDATE crash_reports SET mclogs_id = ?, mclogs_url = ? WHERE id = ?', paste.id, paste.url, crashId);
   recordEvent({
@@ -435,6 +458,7 @@ module.exports = {
   getCrash,
   getCrashText,
   markViewed,
+  markAllViewed,
   shareCrash,
   crashInsights,
   deleteCrash,
