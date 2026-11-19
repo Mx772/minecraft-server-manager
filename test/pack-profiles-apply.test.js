@@ -51,6 +51,8 @@ async function fresh({ optIn = true } = {}) {
   db.run('DELETE FROM server_profile_runs');
   db.run('DELETE FROM server_profile_reviews');
   db.run('UPDATE servers SET env_json = ? WHERE id = ?', '{}', SID);
+  // Never started, so route writes answer directly (a started server backs up first).
+  db.run('UPDATE servers SET last_started_at = NULL WHERE id = ?', SID);
   // A start with no pack opens a new start cycle (clears the restart guard).
   db.run('DELETE FROM server_packs WHERE server_id = ?', SID);
   await packProfiles.apply(SID, { trigger: 'pre-start' });
@@ -511,4 +513,103 @@ test('routes: review prompt applies only what was turned on and reports rebuildN
   r = await app.req('GET', base, { cookie: viewerCookie });
   assert.equal(r.json.review.state, 'reviewed');
   db.run("UPDATE servers SET pending_recreate = 0, env_json = '{}' WHERE id = ?", SID);
+});
+
+test('routes: a server that has started is backed up before a change, once per window', async (t) => {
+  await fresh({ optIn: false });
+  const backups = require('../src/services/backups');
+  const tasks = require('../src/services/tasks');
+  const calls = [];
+  t.mock.method(backups, 'createBackup', async (serverId, opts) => {
+    calls.push(opts);
+    const id = `bk_pp${calls.length}`;
+    db.run(
+      'INSERT INTO backups (id, server_id, filename, rel_path, size_bytes, reason, note) VALUES (?, ?, ?, ?, 0, ?, ?)',
+      id,
+      serverId,
+      `${id}.zip`,
+      `backups/${serverId}/${id}.zip`,
+      opts.reason,
+      opts.note
+    );
+    return { id };
+  });
+  const finished = async (taskId) => {
+    for (let i = 0; i < 200; i++) {
+      const task = tasks.getTask(taskId);
+      if (task.state !== 'running') return task;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error('task did not finish');
+  };
+  const base = `/api/servers/${SID}/profile`;
+  const post = (path, body) => app.req('POST', `${base}/${path}`, { cookie: adminCookie, body });
+
+  // Never started: nothing to lose yet, so the change answers directly with no backup.
+  let r = await post('presets', { changes: [{ presetId: 'fewer-mobs', enabled: true }] });
+  assert.equal(r.status, 200);
+  assert.equal(calls.length, 0);
+
+  db.run("UPDATE servers SET last_started_at = datetime('now') WHERE id = ?", SID);
+  // Turning off a patch-only preset, and Not Now, change no files.
+  r = await post('presets', { changes: [{ presetId: 'fewer-mobs', enabled: false }] });
+  assert.equal(r.status, 200);
+  r = await post('review', { enable: [] });
+  assert.equal(r.status, 200);
+  // Bad input is still a plain 400, not a failed task.
+  r = await post('presets', { changes: [{ presetId: 'nope', enabled: true }] });
+  assert.equal(r.status, 400);
+  assert.equal(calls.length, 0);
+
+  r = await post('presets', { changes: [{ presetId: 'world-rules', enabled: true }] });
+  assert.equal(r.status, 202);
+  const task = await finished(r.json.taskId);
+  assert.equal(task.state, 'done');
+  assert.equal(task.result.ok, true);
+  assert.equal(task.result.presets.find((p) => p.id === 'world-rules').enabled, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].reason, 'pre-update');
+  assert.match(calls[0].note, /^Before recommended settings from the All the Mods 10 profile\./);
+
+  // Inside the window the same backup covers the next change.
+  r = await post('apply');
+  assert.equal(r.status, 200);
+  assert.equal(calls.length, 1);
+
+  // After it, the next change backs up again; a failed backup changes nothing.
+  db.run("UPDATE backups SET created_at = datetime('now', '-31 minutes') WHERE server_id = ?", SID);
+  t.mock.method(backups, 'createBackup', async () => {
+    throw new Error('Not enough disk space for a backup.');
+  });
+  r = await post('presets', { changes: [{ presetId: 'fewer-mobs', enabled: true }] });
+  assert.equal(r.status, 202);
+  const failed = await finished(r.json.taskId);
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.error, 'Not enough disk space for a backup.');
+  r = await app.req('GET', base, { cookie: adminCookie });
+  assert.equal(r.json.presets.find((p) => p.id === 'fewer-mobs').enabled, false);
+
+  db.run('DELETE FROM backups WHERE server_id = ?', SID);
+  db.run('UPDATE servers SET last_started_at = NULL WHERE id = ?', SID);
+});
+
+test('Pack Setup tab: offered for a pack server, holds both cards; others go back to Mods', async () => {
+  await fresh();
+  let r = await app.req('GET', `/servers/${SID}/mods`, { cookie: adminCookie });
+  assert.equal(r.status, 200);
+  assert.match(r.text, new RegExp(`href="/servers/${SID}/pack-setup"`));
+  assert.ok(!r.text.includes('data-prof-card='), 'the card is no longer on the Mods tab');
+  assert.ok(r.text.includes('data-prof-hint='), 'the Mods tab links to suggestions');
+
+  r = await app.req('GET', `/servers/${SID}/pack-setup`, { cookie: adminCookie });
+  assert.equal(r.status, 200);
+  assert.ok(r.text.includes(`data-prof-card="${SID}"`));
+  assert.ok(r.text.includes(`data-cust-card="${SID}"`));
+
+  db.run('DELETE FROM server_packs WHERE server_id = ?', SID);
+  r = await app.req('GET', `/servers/${SID}/mods`, { cookie: adminCookie });
+  assert.ok(!r.text.includes(`/servers/${SID}/pack-setup`), 'the sub-tab must not be offered');
+  r = await app.req('GET', `/servers/${SID}/pack-setup`, { cookie: adminCookie });
+  assert.equal(r.status, 302);
+  assert.match(r.headers.get('location'), new RegExp(`/servers/${SID}/mods$`));
 });

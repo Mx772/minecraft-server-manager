@@ -1,4 +1,4 @@
-// Customizations card on the per-server Mods tab: lists the files the panel
+// Customizations card on the per-server Pack Setup tab: lists the files the panel
 // copies back over the pack on every start, and lets the user remove one.
 import { toast } from '../lib/toast.js';
 import { friendlyError } from '../lib/errors.js';

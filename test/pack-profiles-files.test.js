@@ -272,7 +272,7 @@ test('owner-aware refusal messages', async () => {
   }
   assert.equal(
     customizations.PROFILE_OWNED_MSG,
-    'This file is managed by Recommended Setup. Change it from the Mods tab.'
+    'This file is managed by Recommended Setup. Change it from the Pack Setup tab.'
   );
   assert.equal(
     customizations.OWNED_MSG,

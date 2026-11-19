@@ -1,4 +1,4 @@
-// Recommended Setup card on the per-server Mods tab: pack profile presets the
+// Recommended Setup card on the per-server Pack Setup tab: pack profile presets the
 // panel applies before each start. Hidden when no profile matches the pack.
 // Suggestions are opt-in: a new profile shows a prompt, and nothing is applied
 // until the user reviews it and turns settings on.
@@ -8,6 +8,7 @@ import { withBusy } from '../lib/loading.js';
 import { confirmDialog } from '../lib/confirm.js';
 import { escapeHtml } from '../lib/format.js';
 import { timeAgo } from '../lib/datetime.js';
+import { runTask } from '../lib/progress.js';
 
 const card = document.querySelector('[data-prof-card]');
 if (card) init(card);
@@ -274,6 +275,8 @@ async function init(el) {
     render();
   }
 
+  // On a server that has started before, a change backs the server up first: the
+  // panel answers 202 { taskId } and the task's result is the usual body.
   async function post(path, payload) {
     const res = await fetch(`${base}/${path}`, {
       method: 'POST',
@@ -281,7 +284,25 @@ async function init(el) {
       body: JSON.stringify(payload || {}),
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 202 && data.taskId) {
+      const result = await runTask({
+        title: 'Backing up, then applying recommended settings…',
+        start: () => data.taskId,
+      });
+      return { res: { ok: true }, data: result || {} };
+    }
     return { res, data };
+  }
+
+  // A failed task carries the panel's own message; a dismissed one keeps running
+  // and the progress modal already said so.
+  function report(err, action) {
+    if (err?.dismissed) return;
+    const msg =
+      err instanceof Response || !(err instanceof Error) || err instanceof TypeError || !err.message
+        ? friendlyError(err instanceof Response ? err : null, { action })
+        : err.message;
+    toast(msg, { kind: 'error' });
   }
 
   async function load() {
@@ -291,11 +312,6 @@ async function init(el) {
       if (!res.ok || data.ok === false) throw new Error('load failed');
       state = data;
       render();
-      // The Overview hint links to #recommended-setup, but the card is hidden until
-      // this fetch reveals it, so the browser's own anchor jump has nothing to land on.
-      if (location.hash === '#recommended-setup' && !el.classList.contains('hidden')) {
-        el.scrollIntoView({ block: 'start' });
-      }
     } catch {
       el.classList.remove('hidden');
       body.innerHTML =
@@ -331,11 +347,10 @@ async function init(el) {
           : 'Preset turned off. Files it added were removed. Other changes it made stay until you change them or the pack updates the file.'
       );
     } catch (err) {
-      input.checked = !enabled; // revert
       input.disabled = !canEdit;
-      toast(friendlyError(err instanceof Response ? err : null, { action: 'change that preset' }), {
-        kind: 'error',
-      });
+      // A dismissed task still finishes, so the switch stays where the user put it.
+      if (!err?.dismissed) input.checked = !enabled; // revert
+      report(err, 'change that preset');
     }
   });
 
@@ -355,9 +370,7 @@ async function init(el) {
             : 'Okay. You can turn suggestions on any time from this card.'
         );
       } catch (err) {
-        toast(friendlyError(err instanceof Response ? err : null, { action: 'save your choice' }), {
-          kind: 'error',
-        });
+        report(err, 'save your choice');
       }
     });
   }
@@ -385,9 +398,7 @@ async function init(el) {
           takeResult(data);
           toast('File replaced. Restart the server to load it.');
         } catch (err) {
-          toast(friendlyError(err instanceof Response ? err : null, { action: 'replace that file' }), {
-            kind: 'error',
-          });
+          report(err, 'replace that file');
         }
       });
       return;
@@ -412,9 +423,7 @@ async function init(el) {
             : 'Nothing to change.'
         );
       } catch (err) {
-        toast(friendlyError(err instanceof Response ? err : null, { action: 'apply the recommended setup' }), {
-          kind: 'error',
-        });
+        report(err, 'apply the recommended setup');
       }
     });
   });

@@ -695,6 +695,67 @@ async function applyNow(serverId, { trigger, actor, withSettings }) {
   };
 }
 
+// ---- safety backup ----------------------------------------------------------
+
+// One backup covers every change made within this window, so turning presets on
+// one at a time doesn't zip a large pack's server once per click. The oldest
+// backup in the window is the state before any recommended change, which is the
+// one a person wants to go back to.
+const BACKUP_REUSE_MINUTES = 30;
+const BACKUP_NOTE_PREFIX = 'Before recommended settings';
+
+/**
+ * Whether a user action that changes this server's files should back it up
+ * first: only once the server has started (before that there is no world or
+ * generated config to lose), and not again inside the reuse window.
+ * @param {string} serverId
+ */
+function needsBackup(serverId) {
+  const row = db.get('SELECT last_started_at FROM servers WHERE id = ? AND deleted_at IS NULL', serverId);
+  if (!row || !row.last_started_at) return false;
+  const recent = db.get(
+    `SELECT id FROM backups WHERE server_id = ? AND reason = 'pre-update' AND note LIKE ?
+       AND created_at > datetime('now', ?)`,
+    serverId,
+    `${BACKUP_NOTE_PREFIX}%`,
+    `-${BACKUP_REUSE_MINUTES} minutes`
+  );
+  return !recent;
+}
+
+/**
+ * Whether a preset change would touch files: turning anything on applies it, and
+ * turning off a preset that adds files removes them. Turning off a patch-only
+ * preset changes nothing on disk.
+ * @param {string} serverId
+ * @param {{ presetId: string, enabled: boolean }[]} changes
+ */
+function changesTouchFiles(serverId, changes) {
+  if (changes.some((c) => c.enabled)) return true;
+  const profile = profileFor(serverId);
+  if (!profile) return false;
+  const off = new Set(changes.map((c) => c.presetId));
+  return profile.presets.some((p) => off.has(p.id) && p.files.length > 0);
+}
+
+/**
+ * Back the server up before applying recommended settings. Kept with the
+ * pre-update backups, so the same retention applies.
+ * @param {string} serverId
+ * @param {{ actor?: string, task?: any }} [opts]
+ */
+async function backupBeforeChange(serverId, { actor = 'system', task = null } = {}) {
+  const profile = profileFor(serverId);
+  const backup = await require('../backups').createBackup(serverId, {
+    reason: 'pre-update',
+    actor,
+    task,
+    note: `${BACKUP_NOTE_PREFIX} from the ${profile ? profile.name : 'pack'} profile.`,
+  });
+  logger.info('Backed up a server before recommended settings.', { serverId, backupId: backup.id });
+  return backup;
+}
+
 /**
  * Save preset choices, then apply what the user has on (config patches, settings,
  * and added files), so turning a preset on takes effect now. Turning one off never
@@ -926,6 +987,9 @@ module.exports = {
   setPresets,
   savePresets,
   replaceFile,
+  needsBackup,
+  changesTouchFiles,
+  backupBeforeChange,
   review,
   checkForSuggestions,
   checkAllForSuggestions,

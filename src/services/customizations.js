@@ -30,7 +30,7 @@ const SECRET_MSG =
   'This customization fills in a secret when the server starts, so it can only be edited in the customizations folder.';
 
 const OWNED_MSG = 'This file is managed by the Discord chat bridge. Change it from the Discord tab.';
-const PROFILE_OWNED_MSG = 'This file is managed by Recommended Setup. Change it from the Mods tab.';
+const PROFILE_OWNED_MSG = 'This file is managed by Recommended Setup. Change it from the Pack Setup tab.';
 /** Owner names of Recommended Setup files are `pack-profile:<profileId>/<presetId>`. */
 const PROFILE_OWNER_PREFIX = 'pack-profile:';
 
