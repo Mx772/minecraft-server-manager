@@ -12,7 +12,8 @@ name: CI
 # Branch images are for trying a branch on a real host before it merges: every
 # push to a PR opened from a branch in this repo publishes :branch-feat-my-thing
 # once checks + tests pass (or run `gh workflow run ci.yml --ref feat/my-thing`
-# for a branch with no PR). They never touch :edge or :latest. PRs from forks
+# for a branch with no PR). They never touch :edge or :latest. On a PR, the
+# merge job also keeps one comment on the PR up to date with the image tags. PRs from forks
 # never publish: they get the build-only docker-build check instead.
 #
 # So :latest and :v<version> only ever move when a release is tagged, and every
@@ -240,6 +241,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      pull-requests: write # the branch-image comment on a PR run
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -268,6 +270,7 @@ jobs:
             slug="$(printf '%s' "${BRANCH,,}" | tr -c 'a-z0-9_.-' '-' | sed -E 's/-+/-/g; s/^-|-$//g' | cut -c1-100)"
             sha="sha-${HEAD_SHA::7}"
             echo "primary=${image}:branch-${slug}" >> "$GITHUB_OUTPUT"
+            echo "pinned=${image}:${sha}" >> "$GITHUB_OUTPUT"
             echo "args=-t ${image}:branch-${slug} -t ${image}:${sha}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -296,6 +299,46 @@ jobs:
 
       - name: Inspect
         run: docker buildx imagetools inspect "${{ steps.tags.outputs.primary }}"
+
+      # One comment per PR, edited in place on every push (found by the hidden
+      # marker), so the PR always shows the newest image without piling up.
+      - name: Post the branch image on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          PRIMARY: ${{ steps.tags.outputs.primary }}
+          PINNED: ${{ steps.tags.outputs.pinned }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          marker='<!-- branch-image -->'
+          body="$(cat <<MD
+          ${marker}
+          ### Branch image
+
+          Built from ${HEAD_SHA::7} for linux/amd64 and linux/arm64 ([CI run](${RUN_URL})).
+
+          | Tag | Moves |
+          | --- | --- |
+          | \`${PRIMARY}\` | On every push to this PR. |
+          | \`${PINNED}\` | Never (this exact commit). |
+
+          \`\`\`bash
+          docker pull ${PRIMARY}
+          \`\`\`
+
+          In \`docker-compose.yml\`, set \`image: ${PRIMARY}\` and run \`docker compose up -d\`.
+          MD
+          )"
+          id="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"${marker}\")) | .id" | head -n1)"
+          if [ -n "${id}" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${id}" -f body="${body}" >/dev/null
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" -f body="${body}" >/dev/null
+          fi
 
   release:
     # Publish a GitHub Release for each pushed v* tag. Idempotent - re-running
