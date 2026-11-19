@@ -106,6 +106,27 @@ function init() {
     });
   });
 
+  // ---- Custom domains: opt-in outside reachability check ----
+  document.getElementById('external-reachability-check')?.addEventListener('change', async (e) => {
+    const el = e.currentTarget;
+    const enabled = el.checked;
+    el.disabled = true;
+    try {
+      const res = await post('/api/settings', { externalReachabilityCheck: enabled });
+      if (res) {
+        toast(
+          enabled
+            ? 'Domains can now be checked from outside through mcsrvstat.us.'
+            : 'Domains are no longer checked from outside.'
+        );
+      } else {
+        el.checked = !enabled; // revert - post() already toasted why
+      }
+    } finally {
+      el.disabled = false;
+    }
+  });
+
   // ---- Public API (/api/v1) ----
   document.getElementById('public-api-enabled')?.addEventListener('change', async (e) => {
     const el = e.currentTarget;

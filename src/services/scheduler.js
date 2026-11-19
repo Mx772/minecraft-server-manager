@@ -35,6 +35,7 @@ const TASK_TYPES = {
   'tmp-clean': { label: 'Clear temporary files', serverScoped: false },
   'ban-expiry-sweep': { label: 'Ban expiry sweep', serverScoped: false },
   'content-meta-backfill': { label: 'Content metadata backfill', serverScoped: false },
+  'domain-check': { label: 'Domain DNS check', serverScoped: false },
 };
 
 // A scheduled backup or start refused only because another action holds its
@@ -279,6 +280,9 @@ async function runTask(schedule, task = null) {
       await require('../storage/indexer').scan();
       await require('../storage/indexer').enforceStrictQuotas();
       break;
+    case 'domain-check':
+      await require('./domains').checkEverything({ actor });
+      break;
     case 'tmp-clean':
       // Scheduled path only clears entries older than 24h so in-flight
       // downloads/uploads survive the 04:30 sweep (boot still wipes fully).
@@ -371,6 +375,7 @@ function seedGlobalDefaults() {
     { task_type: 'tmp-clean', cron: '30 4 * * *' },
     { task_type: 'ban-expiry-sweep', cron: '*/15 * * * *' },
     { task_type: 'content-meta-backfill', cron: '20 3 * * *' },
+    { task_type: 'domain-check', cron: '40 */6 * * *' },
   ];
   for (const d of defaults) {
     const exists = db.get('SELECT 1 AS x FROM schedules WHERE task_type = ? AND server_id IS NULL', d.task_type);

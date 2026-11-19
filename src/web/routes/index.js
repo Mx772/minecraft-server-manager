@@ -518,6 +518,14 @@ router.get(
       // IPv4s + game port, ready to copy.
       const os = require('node:os');
       const addrs = [];
+      const domainsService = require('../../services/domains');
+      // A verified primary domain is what players type, so it goes first and has no port.
+      const domainAddr = domainsService.addressFor(row.id);
+      if (domainAddr) addrs.push(domainAddr);
+      context.domainAddress = domainAddr;
+      context.isAdmin = req.user.role === 'admin';
+      context.domains = domainsService.list(row.id);
+      context.externalReachabilityCheck = require('../../services/settings').isExternalReachabilityEnabled();
       const publicAddr = require('../../services/settings').publicAddress(row.port_game);
       if (publicAddr) addrs.push(publicAddr);
       for (const nics of Object.values(os.networkInterfaces())) {
@@ -1193,6 +1201,7 @@ router.get('/settings', requireRole('admin'), (req, res) => {
     retention: backupRetention.globalConfig(),
     retentionDefaults: backupRetention.DEFAULTS,
     publicApiEnabled: settings.isPublicApiEnabled(),
+    externalReachabilityCheck: settings.isExternalReachabilityEnabled(),
     apiTokens: require('../../services/apiTokens').listTokens(),
     serverOptions: require('../../services/servers')
       .listServers()

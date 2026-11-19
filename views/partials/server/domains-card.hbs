@@ -1,0 +1,23 @@
+{{! Rendered client-side by domains-card.js from the JSON below and the /api/servers/:id/domains responses. }}
+<div class="card p-4" id="domains-card" data-domains-card="{{server.id}}" data-can-edit="{{#if perms.settings}}true{{else}}false{{/if}}" data-external="{{#if externalReachabilityCheck}}true{{else}}false{{/if}}">
+  <h3 class="font-semibold">Domains</h3>
+  <p class="help mt-1 max-w-prose">Friendly names players type, like atm10.example.com. The panel checks each one's DNS records point at this server.</p>
+  {{#unless domains.publicHost}}
+    <div class="notice notice-info mt-3">
+      {{#if isAdmin}}Set a public address in <a class="text-link hover:underline" href="/settings">Settings</a> so the panel can check that domains point at this machine.{{else}}Set a public address in Settings so the panel can check that domains point at this machine.{{/if}}
+    </div>
+  {{/unless}}
+  <div class="mt-3 space-y-3" data-domains-list>
+    <p class="text-sm text-ink-faint">Loading domains…</p>
+  </div>
+  {{#if perms.settings}}
+    <form class="mt-4 flex flex-col gap-2 sm:flex-row sm:items-end" data-domains-add>
+      <div class="min-w-0 flex-1">
+        <label class="label" for="domains-add-input">Domain</label>
+        <input class="input w-full font-mono" id="domains-add-input" name="domain" placeholder="atm10.example.com" autocomplete="off" spellcheck="false" autocapitalize="none">
+      </div>
+      <button class="btn btn-primary" type="submit">{{{icon 'plus' 'size-4'}}} Add Domain</button>
+    </form>
+  {{/if}}
+  <script type="application/json" data-domains-initial>{{jsonScript domains}}</script>
+</div>

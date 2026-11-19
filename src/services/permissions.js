@@ -225,6 +225,7 @@ const CAPABILITY_INFO = {
       'POST /api/servers/:id/map/disable',
       'WRITES /api/servers/:id/integrations/*',
       'WRITES /api/servers/:id/profile/*',
+      'WRITES /api/servers/:id/domains/*',
     ],
   },
   delete: {

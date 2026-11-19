@@ -175,6 +175,23 @@ function setPublicApiEnabled(on) {
 }
 
 // ---------------------------------------------------------------------------
+// Outside reachability check for custom domains. Off by default: it sends a
+// server's domain name to a third-party status service (see services/domains/external.js).
+
+const EXTERNAL_CHECK_KEY = 'domains.externalCheck';
+
+/** Whether the "from outside" reachability check may contact a public status API. */
+function isExternalReachabilityEnabled() {
+  return get(EXTERNAL_CHECK_KEY, false) === true;
+}
+
+/** Turn the outside reachability check on or off. Returns the new state. */
+function setExternalReachabilityEnabled(on) {
+  set(EXTERNAL_CHECK_KEY, Boolean(on));
+  return Boolean(on);
+}
+
+// ---------------------------------------------------------------------------
 // Analytics: how long chat/death/advancement/command events are kept. Player
 // stats and play time are never pruned by this.
 
@@ -308,6 +325,8 @@ module.exports = {
   setEventRetentionDays,
   isPublicApiEnabled,
   setPublicApiEnabled,
+  isExternalReachabilityEnabled,
+  setExternalReachabilityEnabled,
   getTimezone,
   setTimezone,
   getCountry,

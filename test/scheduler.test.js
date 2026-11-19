@@ -129,7 +129,14 @@ test('startScheduler seeds the global maintenance defaults exactly once', () => 
   scheduler.startScheduler();
   const globals = scheduler.listSchedules().filter((s) => s.serverId === null);
   const types = globals.map((s) => s.taskType).sort();
-  assert.deepEqual(types, ['ban-expiry-sweep', 'content-meta-backfill', 'storage-scan', 'tmp-clean', 'update-check']);
+  assert.deepEqual(types, [
+    'ban-expiry-sweep',
+    'content-meta-backfill',
+    'domain-check',
+    'storage-scan',
+    'tmp-clean',
+    'update-check',
+  ]);
   scheduler.startScheduler(); // idempotent
   const after = scheduler.listSchedules().filter((s) => s.serverId === null);
   assert.equal(after.length, globals.length);

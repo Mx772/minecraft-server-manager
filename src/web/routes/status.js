@@ -9,6 +9,7 @@ const express = require('express');
 const serversService = require('../../services/servers');
 const statusPage = require('../../integrations/statusPage');
 const { serverVM } = require('../viewModels');
+const domainsService = require('../../services/domains');
 
 const router = express.Router();
 
@@ -38,6 +39,8 @@ router.get(
         online: vm.players.online,
         max: vm.players.max,
         uptime: vm.stats.uptime,
+        // The verified primary domain (no port), or null.
+        address: domainsService.addressFor(row.id),
       },
     });
   })
