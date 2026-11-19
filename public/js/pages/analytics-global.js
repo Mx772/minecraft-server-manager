@@ -11,9 +11,6 @@ import { escapeHtml as esc } from '../lib/format.js';
 import { timeAgo, formatDateTime } from '../lib/datetime.js';
 import { renderPlayerHead } from '../lib/playerHead.js';
 
-const root = document.getElementById('ag-root');
-if (root) init(root);
-
 const RANGES = ['24h', '7d', '30d', '90d', 'all'];
 const TABS = ['overview', 'servers', 'players'];
 const SERVER_SORTS = ['playtime', 'players', 'peak', 'lastActive', 'name'];
@@ -1021,3 +1018,8 @@ function init(el) {
   writeUrl(false);
   refresh();
 }
+
+// Start last: init() reads the module-level constants above, which don't exist
+// until their declarations run (calling it from the top crashed the page).
+const root = document.getElementById('ag-root');
+if (root) init(root);
