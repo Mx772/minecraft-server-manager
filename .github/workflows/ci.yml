@@ -6,11 +6,14 @@ name: CI
 #
 #   push to main (every merge)  ->  :edge  + :sha-<7 char commit>
 #   push of a v<semver> tag     ->  :latest + :v<semver>, then a GitHub Release
+#   PR from a branch here       ->  :branch-<branch name> + :sha-<7 char commit>
 #   manual run on a branch      ->  :branch-<branch name> + :sha-<7 char commit>
 #
-# The manual run is for trying a branch on a real host before it merges:
-# `gh workflow run ci.yml --ref feat/my-thing`, then pull
-# :branch-feat-my-thing. It never touches :edge or :latest.
+# Branch images are for trying a branch on a real host before it merges: every
+# push to a PR opened from a branch in this repo publishes :branch-feat-my-thing
+# once checks + tests pass (or run `gh workflow run ci.yml --ref feat/my-thing`
+# for a branch with no PR). They never touch :edge or :latest. PRs from forks
+# never publish: they get the build-only docker-build check instead.
 #
 # So :latest and :v<version> only ever move when a release is tagged, and every
 # merged commit stays pullable by its :sha- tag. The docker/merge/release jobs
@@ -95,9 +98,13 @@ jobs:
   # to main that also publishes. Build one arch, no push, to catch a broken
   # Dockerfile on the PR. Reads the amd64 publish cache but never writes it, so a
   # PR build can't evict main's cache entries.
+  # Same-repo PRs skip this: the `docker` job below builds and publishes their
+  # branch image, which covers the same ground.
   docker-build:
     needs: [checks, tests]
-    if: github.event_name == 'pull_request'
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -117,28 +124,33 @@ jobs:
   # `quality` that is green only when every PR gate is. Keeps the protection
   # rule stable while the gates themselves can be split or renamed freely.
   quality:
-    needs: [checks, tests, docker-build]
+    needs: [checks, tests, docker-build, docker]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Every gate passed
         run: |
-          echo "checks=${{ needs.checks.result }} tests=${{ needs.tests.result }} docker-build=${{ needs.docker-build.result }}"
+          echo "checks=${{ needs.checks.result }} tests=${{ needs.tests.result }} docker-build=${{ needs.docker-build.result }} docker=${{ needs.docker.result }}"
           test "${{ needs.checks.result }}" = success
           test "${{ needs.tests.result }}" = success
-          # docker-build only runs on pull requests; a skipped run is fine on push.
+          # A PR runs exactly one image build: docker-build for forks, docker
+          # (publishing the branch image) for branches in this repo.
           case "${{ needs.docker-build.result }}" in success|skipped) ;; *) exit 1 ;; esac
+          case "${{ needs.docker.result }}" in success|skipped) ;; *) exit 1 ;; esac
 
   docker:
     needs: [checks, tests]
-    # Publish from main, a v* tag, or a manual (workflow_dispatch) run on any
-    # branch. A plain push to a feature branch never publishes, and a branch run
-    # only gets :branch-<name> / :sha-<commit> tags (see the merge job).
+    # Publish from main, a v* tag, a PR opened from a branch in this repo, or a
+    # manual (workflow_dispatch) run on any branch. Branch runs only get
+    # :branch-<name> / :sha-<commit> tags (see the merge job). Fork PRs never
+    # publish: their workflow token is read-only and their code is untrusted.
     if: >-
-      github.event_name != 'pull_request' &&
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') ||
-       github.event_name == 'workflow_dispatch')
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name != 'pull_request' &&
+       (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') ||
+        github.event_name == 'workflow_dispatch'))
     permissions:
       contents: read
       packages: write
@@ -153,7 +165,11 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
+      # On a PR, build the branch head (what someone testing the branch expects),
+      # not GitHub's synthetic merge commit.
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       # GHCR/OCI names must be lowercase - github.repository preserves the
       # owner's actual casing (e.g. OwenWright8/...), which buildx rejects.
@@ -197,7 +213,7 @@ jobs:
           # Links the GHCR package to this repo (its page, README, permissions).
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha || github.sha }}
           outputs: type=image,name=ghcr.io/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           # Scoped per arch - a shared gha cache key would have the two builds
           # overwriting each other's manifest. mode=max also exports the
@@ -232,6 +248,11 @@ jobs:
 
       # Which channel this run publishes to (see the header comment).
       - id: tags
+        env:
+          # A PR run's GITHUB_REF/GITHUB_SHA point at the synthetic merge ref;
+          # tag by the branch and its head commit instead.
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           image="ghcr.io/${IMAGE_NAME}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
@@ -242,10 +263,10 @@ jobs:
             echo "primary=${image}:${sha}" >> "$GITHUB_OUTPUT"
             echo "args=-t ${image}:edge -t ${image}:${sha}" >> "$GITHUB_OUTPUT"
           else
-            # Manual run on a feature branch. Docker tags allow [a-z0-9_.-] and
-            # at most 128 chars, so feat/pack-profiles -> branch-feat-pack-profiles.
-            slug="$(printf '%s' "${GITHUB_REF_NAME,,}" | tr -c 'a-z0-9_.-' '-' | sed -E 's/-+/-/g; s/^-|-$//g' | cut -c1-100)"
-            sha="sha-${GITHUB_SHA::7}"
+            # A PR or manual run on a feature branch. Docker tags allow [a-z0-9_.-]
+            # and at most 128 chars, so feat/pack-profiles -> branch-feat-pack-profiles.
+            slug="$(printf '%s' "${BRANCH,,}" | tr -c 'a-z0-9_.-' '-' | sed -E 's/-+/-/g; s/^-|-$//g' | cut -c1-100)"
+            sha="sha-${HEAD_SHA::7}"
             echo "primary=${image}:branch-${slug}" >> "$GITHUB_OUTPUT"
             echo "args=-t ${image}:branch-${slug} -t ${image}:${sha}" >> "$GITHUB_OUTPUT"
           fi
@@ -270,7 +291,7 @@ jobs:
           docker buildx imagetools create \
             ${{ steps.tags.outputs.args }} \
             --annotation "index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-            --annotation "index:org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --annotation "index:org.opencontainers.image.revision=${{ github.event.pull_request.head.sha || github.sha }}" \
             $(printf "ghcr.io/${IMAGE_NAME}@sha256:%s " *)
 
       - name: Inspect
