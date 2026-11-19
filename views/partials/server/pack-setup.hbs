@@ -1,0 +1,23 @@
+{{! Pack Setup sub-tab (modpack servers only): the pack profile's recommended
+    settings and the user's own customized files. Kept off the Mods tab so a
+    pack with hundreds of mods doesn't bury them under the mod list. }}
+<div class="space-y-6">
+  {{! Loaded by recommended-setup-card.js from /api/servers/:id/profile; stays hidden when no profile matches the pack. }}
+  <div class="hidden" id="recommended-setup" data-prof-card="{{server.id}}" data-server-name="{{server.name}}" data-can-edit="{{#if perms.settings}}true{{else}}false{{/if}}" data-can-power="{{#if perms.power}}true{{else}}false{{/if}}">
+    {{#> settings/card heading="Recommended Setup" desc="Settings this pack's profile suggests for servers. Nothing changes until you turn it on. Your own customized files always win. Once the server has started, the panel backs it up before applying a change."}}
+      <div data-prof-body><p class="text-sm text-ink-faint">Loading…</p></div>
+    {{/settings/card}}
+  </div>
+
+  {{! Loaded by customizations-card.js from /api/servers/:id/customizations. }}
+  <div data-cust-card="{{server.id}}">
+    {{#> settings/card heading="Customizations" desc="Files you changed on purpose, such as configs and scripts. The panel keeps a copy of each and puts it back over the pack's version every time the server starts, so your changes survive pack updates."}}
+      <div data-cust-body><p class="text-sm text-ink-faint">Loading…</p></div>
+      <template data-cust-empty>
+        {{> empty-state iconName='save' title='No Customizations Yet' message='Open Files, pick a config or script, and choose Add To Customizations.'}}
+      </template>
+    {{/settings/card}}
+  </div>
+</div>
+<script type="module" src="/js/pages/recommended-setup-card.js"></script>
+<script type="module" src="/js/pages/customizations-card.js"></script>

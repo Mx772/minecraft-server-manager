@@ -1,4 +1,4 @@
-// Customizations card on the per-server Mods tab: lists the files the panel
+// Customizations card on the per-server Pack Setup tab: lists the files the panel
 // copies back over the pack on every start, and lets the user remove one.
 import { toast } from '../lib/toast.js';
 import { friendlyError } from '../lib/errors.js';
@@ -24,7 +24,9 @@ async function init(el) {
     const status = {
       applied: '<span class="badge badge-ok">Applied</span>',
       pending: '<span class="badge badge-info">Applies At Next Start</span>',
-      managed: '<span class="badge badge-info">Managed by Discord Bridge</span>',
+      managed: `<span class="badge badge-info">${
+        c.owner && c.owner.startsWith('pack-profile:') ? 'Managed by Recommended Setup' : 'Managed by Discord Bridge'
+      }</span>`,
       changed:
         '<span class="badge badge-warn" data-tip="This file on the server is newer than your saved copy. At the next start your saved copy replaces it.">Changed Since Captured</span>',
     }[c.state];

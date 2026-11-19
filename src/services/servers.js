@@ -538,8 +538,22 @@ async function startServerImpl(id, { actor = 'system', rebuilt = false } = {}) {
     const { started } = await recreateServerImpl(id, { actor, quiet: true });
     if (started) return;
   }
+  await applyProfileBeforeStart(id, actor);
   await containers.startContainer(id);
   markStarted(id, actor);
+}
+
+/** Patch the server's pack-profile settings before the container boots. Never blocks or fails a start. */
+async function applyProfileBeforeStart(id, actor) {
+  try {
+    // Mid-function require: packProfiles reaches back into this module.
+    await require('./packProfiles').apply(id, { trigger: 'pre-start', actor });
+  } catch (err) {
+    logger.warn('Applying pack profile settings before a start failed.', {
+      serverId: id,
+      err: serializeError(err, { includeStack: false }),
+    });
+  }
 }
 
 function markStarted(id, actor) {

@@ -184,12 +184,13 @@ function startBackgroundServices(httpServer) {
   require('./integrations/discord').startEventBridge();
   require('./services/inventory').startSnapshotWatcher();
   require('./services/wizard').startOutreachWatcher();
+  // Tell users about suggested pack settings once per server. Deferred so boot is not held up.
+  setImmediate(() => require('./services/packProfiles').checkAllForSuggestions());
 
   // Daily maintenance: prune old analytics timeline rows + closed sessions so the
   // DB doesn't grow without bound over months of uptime. Runs shortly after boot,
   // then every 24h.
   const ANALYTICS_RETENTION_DAYS = 90;
-  const PANEL_DB_BACKUPS_KEEP = 14;
   // Event history retention: previously events pruned ONLY when an admin hit
   // POST /api/events/prune by hand, so the scheduler/watcher/lowdash writes the
   // panel generates every day piled up without bound. A year of full action
@@ -241,27 +242,12 @@ function startBackgroundServices(httpServer) {
     } catch (err) {
       logger.error('Pruning event history or API cache failed.', { err: serializeError(err) });
     }
-    // Snapshot the panel DB itself - the server backups only cover per-server
-    // world dirs, so without this the users/schedules/pins/history/2FA store has
-    // no backup at all. VACUUM INTO is a safe hot copy; keep the newest N.
+    // Snapshot the panel's own state (DB + key files) - the server backups only
+    // cover per-server world dirs, so without this the users/schedules/pins/
+    // history/2FA store has no backup at all. Retention lives in panelBackup.
     try {
-      const fs = require('node:fs');
-      const nodePath = require('node:path');
-      const { dataPath } = require('./storage/pathGuard');
-      const dir = dataPath('backups', '_panel');
-      fs.mkdirSync(dir, { recursive: true });
-      const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
-      // VACUUM INTO runs in a worker thread now, so it can't block the event
-      // loop; log how long the copy took.
-      const blockedMs = await require('./db').backupTo(nodePath.join(dir, `panel-${stamp}.db`));
-      logger.info('Snapshotted the panel database.', { blockedMs, dir: 'data/backups/_panel' });
-      const snaps = fs
-        .readdirSync(dir)
-        .filter((f) => /^panel-.*\.db$/.test(f))
-        .sort();
-      for (const f of snaps.slice(0, Math.max(0, snaps.length - PANEL_DB_BACKUPS_KEEP))) {
-        fs.rmSync(nodePath.join(dir, f), { force: true });
-      }
+      const { name, blockedMs } = await require('./storage/panelBackup').snapshotNightly();
+      logger.info('Snapshotted the panel database.', { blockedMs, snapshot: name });
     } catch (err) {
       logger.error('The panel database backup failed.', { err: serializeError(err) });
     }
