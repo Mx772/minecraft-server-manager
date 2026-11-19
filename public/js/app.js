@@ -253,7 +253,10 @@ document.addEventListener('click', async (e) => {
     const ok = await confirmDelete({ name, id });
     if (!ok) return;
     const restore = setBusy(btn, 'Deleting…');
-    const res = await api(`/api/servers/${id}${ok.deleteData ? '?deleteFiles=true&deleteBackups=true' : ''}`, 'DELETE');
+    const params = [];
+    if (ok.deleteData) params.push('deleteFiles=true', 'deleteBackups=true');
+    if (ok.keepPlayerStats) params.push('keepPlayerStats=true');
+    const res = await api(`/api/servers/${id}${params.length ? `?${params.join('&')}` : ''}`, 'DELETE');
     if (res.ok) {
       toast('Server deleted.');
       location.href = '/';
@@ -331,7 +334,7 @@ window.CD.api = api;
 
 // ---- Delete confirmation: requires typing the server name. Files and backups
 // are KEPT on disk by default; a danger checkbox opts in to permanently
-// deleting them. Resolves to falsy when cancelled, or { deleteData: boolean }. ----
+// deleting them. Resolves to falsy when cancelled, or { deleteData, keepPlayerStats } booleans. ----
 function confirmDelete({ name }) {
   return new Promise((resolve) => {
     let settled = false;
@@ -348,6 +351,23 @@ function confirmDelete({ name }) {
     p.textContent =
       'This removes the server from the panel but keeps its files and backups on disk. Tick the box below only if you want to permanently delete those files and backups too.';
     content.appendChild(p);
+
+    const keepWrap = document.createElement('label');
+    keepWrap.className = 'flex cursor-pointer items-start gap-2 rounded-md border border-line bg-inset p-2.5';
+    const keepInput = document.createElement('input');
+    keepInput.type = 'checkbox';
+    keepInput.className = 'msm-check mt-0.5 shrink-0';
+    keepInput.checked = true;
+    const keepText = document.createElement('span');
+    const keepTitle = document.createElement('span');
+    keepTitle.className = 'block font-semibold';
+    keepTitle.textContent = 'Keep Player Stats';
+    const keepHelp = document.createElement('span');
+    keepHelp.className = 'block text-sm text-ink-soft';
+    keepHelp.textContent = 'Play time and player stats stay on the Analytics page after the server is gone.';
+    keepText.append(keepTitle, keepHelp);
+    keepWrap.append(keepInput, keepText);
+    content.appendChild(keepWrap);
 
     const delWrap = document.createElement('label');
     delWrap.className = 'flex cursor-pointer items-start gap-2 rounded-md border border-danger/40 bg-red-500/10 p-2.5';
@@ -391,7 +411,7 @@ function confirmDelete({ name }) {
               input.focus();
               return false;
             }
-            settle({ deleteData: delInput.checked });
+            settle({ deleteData: delInput.checked, keepPlayerStats: keepInput.checked });
           },
         },
       ],

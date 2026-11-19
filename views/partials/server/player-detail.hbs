@@ -21,7 +21,7 @@
           </span>
         </div>
         {{#if player.uuid}}<div class="mt-0.5 font-mono text-xs text-ink-faint">{{player.uuid}}</div>{{/if}}
-        {{#if player.lastSeen}}<div class="text-xs text-ink-faint">seen ~{{player.lastSeen}}</div>{{/if}}
+        {{#if player.lastSeen}}<div class="text-xs text-ink-faint" data-tip="The last time this player was on the server.">{{#if player.online}}Online now{{else}}Seen <span data-ts-ago="{{player.lastSeen}}">{{player.lastSeen}}</span>{{/if}}</div>{{/if}}
       </div>
       <div class="flex flex-wrap items-center gap-1.5">
         <button class="chip {{#if player.whitelisted}}border-grass-700 bg-grass-500/15 text-ok{{/if}}"

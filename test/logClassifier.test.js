@@ -85,3 +85,14 @@ test('classifies join/leave/chat/death for Bedrock (Geyser/Floodgate) names', ()
   assert.equal(isPvp(pvp), true);
   assert.equal(looksLikePlayer('.Steve'), true);
 });
+
+test('classifies the UUID-of-player line with a lowercase dashed target', () => {
+  const e = classify(`${P}UUID of player Steve is 069A79F4-44E9-4726-A5BE-FCA90E38AAF5`);
+  assert.deepEqual(e, {
+    time: '12:34:56',
+    type: 'uuid',
+    player: 'Steve',
+    target: '069a79f4-44e9-4726-a5be-fca90e38aaf5',
+    message: '',
+  });
+});

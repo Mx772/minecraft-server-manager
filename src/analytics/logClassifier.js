@@ -28,6 +28,9 @@ const CHAT_RE = new RegExp(`^<(${NAME})> (.*)$`);
 const SERVER_CHAT_RE = /^\[(?:Server|Rcon)\] (.*)$/;
 const JOIN_RE = new RegExp(`^(${NAME}) joined the game$`);
 const LOGGED_IN_RE = new RegExp(`^(${NAME})\\[\\/([^\\]]+)\\] logged in with entity id `);
+// "UUID of player Steve is 069a79f4-44e9-4726-a5be-fca90e38aaf5": logged just
+// before the join. Not a timeline event; the ingester uses it to attach an identity.
+const UUID_RE = new RegExp(`^UUID of player (${NAME}) is ([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})$`);
 const LEAVE_RE = new RegExp(`^(${NAME}) left the game$`);
 const LOST_CONN_RE = new RegExp(`^(${NAME}) lost connection: (.*)$`);
 const ADVANCEMENT_RE = new RegExp(
@@ -225,6 +228,9 @@ function classify(line) {
   }
   if ((m = text.match(SERVER_CHAT_RE))) {
     return { time, type: 'chat', player: '[Server]', target: '', message: m[1] };
+  }
+  if ((m = text.match(UUID_RE))) {
+    return { time, type: 'uuid', player: m[1], target: m[2].toLowerCase(), message: '' };
   }
   if ((m = text.match(JOIN_RE))) {
     return { time, type: 'join', player: m[1], target: '', message: '' };

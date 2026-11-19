@@ -84,6 +84,31 @@ async function readUsercache(serverId) {
   return names;
 }
 
+/**
+ * Thin old snapshots: for rows older than the cutoff keep only the latest row
+ * per (server, player, day). Newer rows are never touched.
+ * @param {number} olderThanDays
+ * @returns {number} rows deleted
+ */
+function thinStatSnapshots(olderThanDays) {
+  const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
+  const res = db.run(
+    `DELETE FROM player_stat_snapshots
+      WHERE ts < ?1
+        AND id NOT IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (
+              PARTITION BY server_id, uuid, date(ts) ORDER BY ts DESC, id DESC
+            ) AS rn
+              FROM player_stat_snapshots
+             WHERE ts < ?1
+          ) WHERE rn = 1
+        )`,
+    cutoff
+  );
+  return Number(res.changes);
+}
+
 async function pathExists(p) {
   try {
     await fsp.access(p);
@@ -191,6 +216,7 @@ function startStatsIngest({ intervalMs = 5 * 60 * 1000 } = {}) {
         if (!RUNNING.has(server.status)) continue;
         try {
           await ingestStats(server.id);
+          require('./sessionStats').attributeSessionStats(server.id);
         } catch (err) {
           logger.warn('Stat ingestion for a server failed.', {
             serverId: server.id,
@@ -534,4 +560,13 @@ function computeXrayReport(serverId) {
   };
 }
 
-module.exports = { ingestStats, startStatsIngest, profile, scoreboard, xrayReport, curate };
+module.exports = {
+  ingestStats,
+  startStatsIngest,
+  profile,
+  scoreboard,
+  xrayReport,
+  curate,
+  readUsercache,
+  thinStatSnapshots,
+};

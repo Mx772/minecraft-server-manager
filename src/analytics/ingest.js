@@ -52,6 +52,19 @@ function buildTs(hms, now = new Date()) {
   return d.toISOString();
 }
 
+// Recently seen "UUID of player X is Y" lines, so the join that follows (or
+// already happened) can carry the player's identity. Bounded; oldest evicted.
+const UUID_CACHE_MAX = 1000;
+const recentUuids = new Map(); // `${serverId}\0${lower(name)}` -> dashed uuid
+const uuidKey = (serverId, player) => `${serverId}\0${String(player).toLowerCase()}`;
+
+function rememberUuid(serverId, player, uuid) {
+  const key = uuidKey(serverId, player);
+  recentUuids.delete(key); // re-insert so the newest sits last
+  recentUuids.set(key, uuid);
+  if (recentUuids.size > UUID_CACHE_MAX) recentUuids.delete(recentUuids.keys().next().value);
+}
+
 function openSession(serverId, player, ts) {
   // A dangling open session means we missed the leave - close it at the new join.
   db.run(
@@ -61,10 +74,11 @@ function openSession(serverId, player, ts) {
     player
   );
   db.run(
-    'INSERT OR IGNORE INTO player_sessions (server_id, player, started_at) VALUES (?, ?, ?)',
+    'INSERT OR IGNORE INTO player_sessions (server_id, player, started_at, player_uuid) VALUES (?, ?, ?, ?)',
     serverId,
     player,
-    ts
+    ts,
+    recentUuids.get(uuidKey(serverId, player)) || null
   );
 }
 
@@ -120,6 +134,21 @@ function handleLine(serverId, line) {
   const raw = rest;
   const evt = classify(raw);
   if (!evt) return;
+  if (evt.type === 'uuid') {
+    try {
+      rememberUuid(serverId, evt.player, evt.target);
+      // The join may have been handled first: attach to the open session.
+      db.run(
+        'UPDATE player_sessions SET player_uuid = ? WHERE server_id = ? AND player = ? AND ended_at IS NULL AND player_uuid IS NULL',
+        evt.target,
+        serverId,
+        evt.player
+      );
+    } catch (err) {
+      logger.error('Recording a player UUID failed.', { serverId, err: serializeError(err, { includeStack: false }) });
+    }
+    return;
+  }
   const eventTs = dockerTs || buildTs(evt.time);
   let inserted = false;
   try {
@@ -284,7 +313,7 @@ async function backfillFromLogs(serverId, { tail = 5000 } = {}) {
     if (!rawLine.trim()) continue;
     const { ts: dockerTs, rest: line } = splitDockerTimestamp(rawLine);
     const evt = classify(line);
-    if (!evt) continue;
+    if (!evt || evt.type === 'uuid') continue;
     const ts = dockerTs || buildTs(evt.time, now);
     if (newest && ts < newest.ts) continue;
     const key = `${ts}\u0000${line}`;
@@ -295,14 +324,11 @@ async function backfillFromLogs(serverId, { tail = 5000 } = {}) {
   return { inserted };
 }
 
-/** Prune old timeline rows and closed sessions. Returns deleted counts. */
+/** Prune old timeline rows. Sessions are kept: they feed the daily rollup. */
 function pruneOlderThan(days) {
   const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
   const events = Number(db.run('DELETE FROM player_events WHERE ts < ?', cutoff).changes);
-  const sessions = Number(
-    db.run('DELETE FROM player_sessions WHERE ended_at IS NOT NULL AND ended_at < ?', cutoff).changes
-  );
-  return { events, sessions };
+  return { events };
 }
 
 module.exports = {
@@ -313,4 +339,5 @@ module.exports = {
   buildTs,
   splitDockerTimestamp,
   closeAllSessions,
+  handleLine,
 };

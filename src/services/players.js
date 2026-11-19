@@ -13,6 +13,7 @@ const { recordEvent } = require('../events');
 const { execCapture } = require('../docker/containers');
 const mojangProfiles = require('./mojangProfiles');
 const servers = require('./servers');
+const db = require('../db');
 
 // Every env var that can make the itzg image provision whitelisting. When the
 // panel's whitelist toggle is used they are all cleared - the image re-asserts
@@ -213,6 +214,48 @@ async function resolveIdentity(serverId, name) {
 // ---------------------------------------------------------------------------
 // Read model
 
+const USERCACHE_TTL_MS = 30 * 86_400_000;
+
+/**
+ * Fill lastSeen from player_sessions (one query for the whole roster): the end of
+ * the newest session, or now with `online` set when a session is still open.
+ * Players with no sessions fall back to the usercache estimate, else stay null.
+ */
+function applyLastSeen(serverId, entries, cacheLastSeen) {
+  const byUuid = new Map();
+  const byName = new Map();
+  for (const r of db.all(
+    `SELECT lower(player) AS n, lower(player_uuid) AS u,
+            MAX(COALESCE(ended_at, started_at)) AS last_at, MAX(ended_at IS NULL) AS open
+       FROM player_sessions WHERE server_id = ? GROUP BY lower(player), lower(player_uuid)`,
+    serverId
+  )) {
+    for (const [map, k] of [
+      [byUuid, r.u],
+      [byName, r.n],
+    ]) {
+      if (!k) continue;
+      const prev = map.get(k);
+      map.set(k, {
+        last: prev && prev.last > r.last_at ? prev.last : r.last_at,
+        open: Boolean(r.open) || Boolean(prev && prev.open),
+      });
+    }
+  }
+  for (const e of entries) {
+    const s = (e.uuid && byUuid.get(e.uuid.toLowerCase())) || byName.get(e.name.toLowerCase());
+    if (s) {
+      e.lastSeen = s.open ? new Date().toISOString() : s.last;
+      if (s.open) e.online = true;
+    } else {
+      e.lastSeen =
+        (e.uuid && cacheLastSeen.get(e.uuid.toLowerCase())) ||
+        cacheLastSeen.get(`name:${e.name.toLowerCase()}`) ||
+        null;
+    }
+  }
+}
+
 /**
  * Merge every player the server has ever seen into one list.
  * @param {string} serverId
@@ -257,8 +300,17 @@ function listPlayers(serverId, onlineNames = []) {
     Object.assign(entry, patch);
   };
 
+  // usercache.json's expiresOn is the last login plus a month, so it only serves
+  // as a fallback (minus that month) for players with no recorded sessions.
+  const cacheLastSeen = new Map();
   for (const e of readJson(serverId, 'usercache.json')) {
-    upsert(e.name, e.uuid, { lastSeen: e.expiresOn || null });
+    upsert(e.name, e.uuid, {});
+    const exp = Date.parse(e.expiresOn || '');
+    if (!Number.isNaN(exp)) {
+      const iso = new Date(exp - USERCACHE_TTL_MS).toISOString();
+      if (e.uuid) cacheLastSeen.set(String(e.uuid).toLowerCase(), iso);
+      if (e.name) cacheLastSeen.set(`name:${e.name.toLowerCase()}`, iso);
+    }
   }
   for (const e of readJson(serverId, 'whitelist.json')) {
     upsert(e.name, e.uuid, { whitelisted: true });
@@ -278,6 +330,7 @@ function listPlayers(serverId, onlineNames = []) {
       banExpires: expired || !e.expires || e.expires === 'forever' ? null : e.expires,
     });
   }
+  applyLastSeen(serverId, entries, cacheLastSeen);
   for (const name of onlineNames) {
     upsert(name, null, { online: true });
   }

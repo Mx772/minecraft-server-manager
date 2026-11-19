@@ -47,7 +47,7 @@ test('closeAllSessions closes every open session for a server', () => {
   assert.equal(all.length, 2);
 });
 
-test('pruneOlderThan removes old events and closed sessions but keeps fresh ones', () => {
+test('pruneOlderThan removes old events but keeps every session', () => {
   const id = app.seedServer('ig_prune');
   const old = '2020-01-01T00:00:00.000Z';
   const fresh = new Date().toISOString();
@@ -58,10 +58,9 @@ test('pruneOlderThan removes old events and closed sessions but keeps fresh ones
 
   const res = ingest.pruneOlderThan(30);
   assert.equal(res.events, 1); // only the old event removed
-  assert.equal(res.sessions, 1); // only the old CLOSED session removed
 
   assert.equal(db.get('SELECT COUNT(*) n FROM player_events WHERE server_id = ?', id).n, 1);
-  // The open 'D' session survives; the closed old 'C' one is gone.
+  // Sessions are never pruned: they feed the daily rollup.
   assert.equal(db.get("SELECT COUNT(*) n FROM player_sessions WHERE server_id = ? AND player = 'D'", id).n, 1);
-  assert.equal(db.get("SELECT COUNT(*) n FROM player_sessions WHERE server_id = ? AND player = 'C'", id).n, 0);
+  assert.equal(db.get("SELECT COUNT(*) n FROM player_sessions WHERE server_id = ? AND player = 'C'", id).n, 1);
 });

@@ -1107,6 +1107,19 @@ router.get('/activity', (req, res) => {
   });
 });
 
+// Global analytics: the page shell. Data comes from /api/analytics, scoped per user.
+router.get('/analytics', (req, res) => {
+  const { meta } = require('../../analytics/global').scope(req.user, { deleted: true });
+  const pickable = [...meta.values()].map((m) => ({ id: m.id, name: m.name, deleted: m.deleted }));
+  res.render('analytics', {
+    title: 'Analytics',
+    active: 'analytics',
+    isAdmin: req.user.role === 'admin',
+    pickable,
+    hasServers: pickable.length > 0,
+  });
+});
+
 // Global file manager over ./data (admin only - full panel data access).
 router.get(
   '/files',
@@ -1166,6 +1179,7 @@ router.get('/settings', requireRole('admin'), (req, res) => {
     },
     defaults: settings.getDefaults(),
     defaultsBase: config.defaults,
+    eventRetentionDays: settings.getEventRetentionDays() ?? 'forever',
     retention: backupRetention.globalConfig(),
     retentionDefaults: backupRetention.DEFAULTS,
     publicApiEnabled: settings.isPublicApiEnabled(),

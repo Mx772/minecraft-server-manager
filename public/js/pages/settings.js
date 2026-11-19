@@ -88,6 +88,15 @@ function init() {
     });
   }
 
+  document.getElementById('set-event-retention-save')?.addEventListener('click', async (e) => {
+    const sel = document.getElementById('set-event-retention');
+    await withBusy(e.currentTarget, 'Saving…', async () => {
+      const value = sel.value === 'forever' ? 'forever' : Number(sel.value);
+      const res = await post('/api/settings/analytics', { eventRetentionDays: value });
+      if (res) toast('Analytics settings saved.');
+    });
+  });
+
   document.getElementById('set-cf-test')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     await withBusy(btn, 'Checking…', async () => {

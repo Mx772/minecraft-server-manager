@@ -133,6 +133,22 @@
     </div>
   {{/settings/card}}
 
+  {{#> settings/card heading="Analytics" id="analytics-card"}}
+    <div>
+      <label class="label" for="set-event-retention">Keep Server Events For</label>
+      <div class="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+        <select class="input w-auto" id="set-event-retention" data-label="Keep server events for">
+          <option value="30"{{#if (eq eventRetentionDays 30)}} selected{{/if}}>30 Days</option>
+          <option value="90"{{#if (eq eventRetentionDays 90)}} selected{{/if}}>90 Days</option>
+          <option value="365"{{#if (eq eventRetentionDays 365)}} selected{{/if}}>1 Year</option>
+          <option value="forever"{{#if (eq eventRetentionDays 'forever')}} selected{{/if}}>Forever</option>
+        </select>
+        <button class="btn" id="set-event-retention-save">Save Analytics</button>
+      </div>
+      <p class="help">Chat, deaths, advancements, and commands older than this are removed. Player stats and play time are always kept.</p>
+    </div>
+  {{/settings/card}}
+
   {{#> settings/card heading="Users" wide=true}}
     <div class="overflow-x-auto">
       <table class="table-base table-stack" id="users-table">

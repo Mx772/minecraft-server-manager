@@ -178,6 +178,22 @@ async function handleEvent(evt) {
   }
   if (eventStatus !== 'die') return;
 
+  // The container is gone, so no leave lines will ever arrive: close any
+  // sessions still open at the moment it died.
+  try {
+    const nano = Number(evt.timeNano);
+    const secs = Number(evt.time);
+    const diedAt =
+      Number.isFinite(nano) && nano > 0 ? nano / 1e6 : Number.isFinite(secs) && secs > 0 ? secs * 1000 : NaN;
+    const ts = Number.isNaN(diedAt) ? new Date() : new Date(diedAt);
+    require('../analytics/ingest').closeAllSessions(serverId, ts.toISOString());
+  } catch (err) {
+    logger.warn('Closing open player sessions after a container exit failed.', {
+      serverId,
+      err: serializeError(err, { includeStack: false }),
+    });
+  }
+
   const exitCode = Number(evt.Actor.Attributes.exitCode ?? -1);
   const stopRequested = hasPendingStopRequest(serverId);
   // Clean exits are judged by the exit code, not just the request window:
