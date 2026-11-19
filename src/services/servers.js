@@ -1121,7 +1121,10 @@ async function changeGamePort(id, port, opts = {}) {
  * never silently destroyed. Pass `keepWorld: false` and/or `keepBackups: false`
  * to explicitly remove them (the UI makes this an opt-in checkbox).
  */
-async function deleteServerImpl(id, { actor = 'system', keepWorld = true, keepBackups = true } = {}) {
+async function deleteServerImpl(
+  id,
+  { actor = 'system', keepWorld = true, keepBackups = true, keepPlayerStats = false } = {}
+) {
   const server = mustGet(id);
   // Same stop-requested marker as stopServerImpl/recreateServerImpl: the
   // deleted container's `die` must not be read by the watcher as an
@@ -1188,6 +1191,19 @@ async function deleteServerImpl(id, { actor = 'system', keepWorld = true, keepBa
   // error can't leave a "live" (deleted_at IS NULL) server whose content/backups
   // are already gone - a zombie. Either everything is removed or nothing is.
   const contentIds = db.all('SELECT id FROM server_content WHERE server_id = ?', id).map((r) => r.id);
+  const deletedAt = new Date().toISOString();
+  /** @type {string[]} */
+  let viewerIds = [];
+  if (keepPlayerStats) {
+    // Container is gone: no leave lines will arrive, so end open sessions now.
+    require('../analytics/ingest').closeAllSessions(id, deletedAt);
+    // Admins always see everything, so only record the other users who could view it.
+    const permissions = require('./permissions');
+    viewerIds = db
+      .all("SELECT id, role FROM users WHERE role != 'admin'")
+      .filter((u) => permissions.effective(u, id).includes('view'))
+      .map((u) => u.id);
+  }
   db.transaction(() => {
     db.run("DELETE FROM update_checks WHERE subject_type = 'pack' AND subject_id = ?", id);
     for (const cid of contentIds) {
@@ -1197,8 +1213,34 @@ async function deleteServerImpl(id, { actor = 'system', keepWorld = true, keepBa
     db.run('DELETE FROM server_packs WHERE server_id = ?', id);
     db.run('DELETE FROM integrations WHERE server_id = ?', id);
     db.run('DELETE FROM player_events WHERE server_id = ?', id);
-    db.run('DELETE FROM player_sessions WHERE server_id = ?', id);
-    db.run('DELETE FROM player_stat_snapshots WHERE server_id = ?', id);
+    // Samples are server data, not player analytics: they go even when stats are kept.
+    db.run('DELETE FROM server_samples WHERE server_id = ?', id);
+    db.run('DELETE FROM server_samples_hourly WHERE server_id = ?', id);
+    db.run('DELETE FROM deleted_server_viewers WHERE server_id = ?', id);
+    db.run('DELETE FROM deleted_servers WHERE id = ?', id);
+    if (keepPlayerStats) {
+      db.run(
+        `INSERT OR REPLACE INTO deleted_servers
+           (id, display_name, icon, accent, type, mc_version, created_at, deleted_at, deleted_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id,
+        server.display_name,
+        server.icon,
+        server.accent,
+        server.type,
+        server.mc_version,
+        server.created_at,
+        deletedAt,
+        actor
+      );
+      for (const userId of viewerIds) {
+        db.run('INSERT OR IGNORE INTO deleted_server_viewers (server_id, user_id) VALUES (?, ?)', id, userId);
+      }
+    } else {
+      db.run('DELETE FROM player_sessions WHERE server_id = ?', id);
+      db.run('DELETE FROM player_daily WHERE server_id = ?', id);
+      db.run('DELETE FROM player_stat_snapshots WHERE server_id = ?', id);
+    }
     db.run('DELETE FROM crash_reports WHERE server_id = ?', id);
     // Added: these were previously leaked on delete (no FK cascade).
     db.run('DELETE FROM chat_commands WHERE server_id = ?', id);
@@ -1216,6 +1258,17 @@ async function deleteServerImpl(id, { actor = 'system', keepWorld = true, keepBa
   // The delete just dropped this server's update_checks/server_content/server_packs
   // rows - the outdated-count badge would otherwise keep counting them.
   require('../updates/checker').invalidateOutdatedCache();
+  if (keepPlayerStats) {
+    // Reflect the sessions just closed; a failure must not fail the delete.
+    try {
+      require('../analytics/rollup').rebuildDaily({ fromDay: deletedAt.slice(0, 10), serverIds: [id] });
+    } catch (err) {
+      logger.warn('Refreshing the daily rollup after a delete failed.', {
+        serverId: id,
+        err: serializeError(err, { includeStack: false }),
+      });
+    }
+  }
   recordEvent({
     serverId: id,
     actor,
@@ -1229,13 +1282,40 @@ async function deleteServerImpl(id, { actor = 'system', keepWorld = true, keepBa
           ? ' (backups kept)'
           : ''
     }.`,
-    details: { keepWorld, keepBackups, freedBytes },
+    details: { keepWorld, keepBackups, keepPlayerStats, freedBytes },
   });
-  logger.info('Deleted a server.', { serverId: id, actor, keepWorld, keepBackups, freedBytes });
+  logger.info('Deleted a server.', { serverId: id, actor, keepWorld, keepBackups, keepPlayerStats, freedBytes });
   return { freedBytes };
 }
 
 const deleteServer = guardOp('delete', deleteServerImpl);
+
+/**
+ * Remove the player stats kept from a deleted server (sessions, snapshots, daily
+ * rollup, viewer list and label). 404 when nothing was kept for that id.
+ * @param {string} id
+ * @param {{ actor?: string }} [opts]
+ */
+function purgeDeletedServerStats(id, { actor = 'system' } = {}) {
+  const kept = db.get('SELECT id, display_name FROM deleted_servers WHERE id = ?', id);
+  if (!kept) throw httpError(404, 'No kept player stats were found for that server.');
+  db.transaction(() => {
+    db.run('DELETE FROM player_sessions WHERE server_id = ?', id);
+    db.run('DELETE FROM player_stat_snapshots WHERE server_id = ?', id);
+    db.run('DELETE FROM player_daily WHERE server_id = ?', id);
+    db.run('DELETE FROM server_samples WHERE server_id = ?', id);
+    db.run('DELETE FROM server_samples_hourly WHERE server_id = ?', id);
+    db.run('DELETE FROM deleted_server_viewers WHERE server_id = ?', id);
+    db.run('DELETE FROM deleted_servers WHERE id = ?', id);
+  });
+  recordEvent({
+    serverId: id,
+    actor,
+    type: 'config-changed',
+    summary: `Kept player stats removed for ${kept.display_name}.`,
+  });
+  logger.info('Removed kept player stats for a deleted server.', { serverId: id, actor });
+}
 
 // A container's healthcheck stays in `starting` for the whole StartPeriod
 // (see docker/containers.js healthcheckSpec - 2h), and a hang - as opposed to
@@ -1577,6 +1657,7 @@ module.exports = {
   changeGamePort,
   summarizeServerChanges,
   deleteServer,
+  purgeDeletedServerStats,
   startServer,
   stopServer,
   restartServer,

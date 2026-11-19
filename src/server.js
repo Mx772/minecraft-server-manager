@@ -187,10 +187,11 @@ function startBackgroundServices(httpServer) {
   // Tell users about suggested pack settings once per server. Deferred so boot is not held up.
   setImmediate(() => require('./services/packProfiles').checkAllForSuggestions());
 
-  // Daily maintenance: prune old analytics timeline rows + closed sessions so the
-  // DB doesn't grow without bound over months of uptime. Runs shortly after boot,
-  // then every 24h.
-  const ANALYTICS_RETENTION_DAYS = 90;
+  // Daily maintenance: prune old analytics timeline rows, thin old stat snapshots
+  // and prune the chatbot's outreach log so the DB doesn't grow without bound over
+  // months of uptime. Runs shortly after boot, then every 24h. Sessions are kept.
+  // Outreach rows older than this many days are pruned.
+  const OUTREACH_RETENTION_DAYS = 90;
   // Event history retention: previously events pruned ONLY when an admin hit
   // POST /api/events/prune by hand, so the scheduler/watcher/lowdash writes the
   // panel generates every day piled up without bound. A year of full action
@@ -204,15 +205,17 @@ function startBackgroundServices(httpServer) {
   const API_CACHE_RETENTION_DAYS = 30;
   async function runMaintenance() {
     try {
-      const r = require('./analytics/ingest').pruneOlderThan(ANALYTICS_RETENTION_DAYS);
+      const retentionDays = require('./services/settings').getEventRetentionDays(); // null = Forever
+      const r = retentionDays === null ? { events: 0 } : require('./analytics/ingest').pruneOlderThan(retentionDays);
+      const thinned = require('./analytics/stats').thinStatSnapshots(retentionDays ?? 90);
       const wizard = require('./services/wizard');
       wizard.pruneTranscripts();
-      wizard.pruneOutreach(ANALYTICS_RETENTION_DAYS);
-      if (r.events || r.sessions) {
+      wizard.pruneOutreach(OUTREACH_RETENTION_DAYS);
+      if (r.events || thinned) {
         logger.info('Pruned old analytics rows.', {
           events: r.events,
-          sessions: r.sessions,
-          olderThanDays: ANALYTICS_RETENTION_DAYS,
+          snapshotsThinned: thinned,
+          olderThanDays: retentionDays,
         });
       }
     } catch (err) {
@@ -311,6 +314,9 @@ function startBackgroundServices(httpServer) {
       .startIngest()
       .catch((err) => logger.error('Starting analytics ingest failed.', { err: serializeError(err) }));
     require('./analytics/stats').startStatsIngest({});
+    require('./analytics/rollup').startRollup();
+    require('./analytics/samples').startSampler();
+    require('./analytics/samples').startSampleRollup();
     require('./services/liveCache').startLiveCache({});
     // Honor "start on panel boot", and recover servers that crashed while the
     // panel was down: the live docker-events watcher never saw that 'die', so

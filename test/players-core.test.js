@@ -198,3 +198,34 @@ test('resolveIdentity resolves a known local player without network', async () =
   assert.equal(res.uuid, UUID);
   assert.equal(res.name, 'Steve');
 });
+
+test('listPlayers takes lastSeen from sessions, marks open sessions online, and falls back to the usercache', () => {
+  const db = require('../src/db');
+  const id = app.seedServer('pl_seen');
+  seedFiles(id, {
+    'usercache.json': [
+      { name: 'Steve', uuid: UUID, expiresOn: '2027-01-01 00:00:00 +0000' },
+      { name: 'Alex', uuid: '3f5f7c2a-8a4e-4a1a-9c1b-000000000002', expiresOn: '2027-01-01 00:00:00 +0000' },
+      { name: 'Kai', uuid: '3f5f7c2a-8a4e-4a1a-9c1b-000000000003', expiresOn: '2027-01-01 00:00:00 +0000' },
+    ],
+  });
+  const ins = (name, start, end) =>
+    db.run(
+      'INSERT INTO player_sessions (server_id, player, started_at, ended_at) VALUES (?, ?, ?, ?)',
+      id,
+      name,
+      start,
+      end
+    );
+  ins('steve', '2026-01-01T10:00:00.000Z', '2026-01-01T11:00:00.000Z');
+  ins('steve', '2026-02-01T10:00:00.000Z', '2026-02-01T12:30:00.000Z');
+  ins('Alex', '2026-03-01T10:00:00.000Z', null);
+  const byName = Object.fromEntries(players.listPlayers(id).map((p) => [p.name, p]));
+  assert.equal(byName.Steve.lastSeen, '2026-02-01T12:30:00.000Z');
+  assert.equal(byName.Steve.online, false);
+  assert.equal(byName.Alex.online, true);
+  assert.ok(Math.abs(Date.parse(byName.Alex.lastSeen) - Date.now()) < 5000);
+  // No sessions: expiresOn minus the 30-day cache lifetime.
+  assert.equal(byName.Kai.lastSeen, '2026-12-02T00:00:00.000Z');
+  assert.equal(byName.Kai.online, false);
+});

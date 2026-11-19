@@ -356,3 +356,14 @@ test('when the stream drops the watcher reconnects, backing off and resetting on
   await new Promise((r) => realSetTimeout(r, 200));
   assert.ok(streams.length > live, 'reconnects again after the live stream ends');
 });
+
+test("a die event closes the server's open player sessions", async () => {
+  const id = seed();
+  db.run(
+    "INSERT INTO player_sessions (server_id, player, started_at) VALUES (?, 'Steve', '2026-01-01T00:00:00.000Z')",
+    id
+  );
+  await watcher.handleEvent({ ...evt(id, 'die', { exitCode: '0' }), time: 1767225900 }); // 2026-01-01T00:05:00Z
+  const row = db.get('SELECT ended_at FROM player_sessions WHERE server_id = ?', id);
+  assert.equal(row.ended_at, '2026-01-01T00:05:00.000Z');
+});

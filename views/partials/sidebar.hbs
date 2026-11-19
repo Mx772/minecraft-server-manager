@@ -40,6 +40,9 @@
       <a class="nav-item {{#if (eq active 'activity')}}active{{/if}}" href="/activity">
         {{{icon 'history' 'size-4'}}} Activity
       </a>
+      <a class="nav-item {{#if (eq active 'analytics')}}active{{/if}}" href="/analytics">
+        {{{icon 'chart-column' 'size-4'}}} Analytics
+      </a>
 
       {{#if servers.length}}
         <div class="pt-3 pb-1 pl-3 eyebrow">Servers</div>

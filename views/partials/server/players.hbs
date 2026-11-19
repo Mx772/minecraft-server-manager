@@ -72,7 +72,7 @@
                   <div class="mt-0.5 text-[11px] leading-tight text-ink-faint">Not whitelisted</div>
                 {{/if}}
               {{/if}}
-              {{#if lastSeen}}<div class="mt-0.5 text-[11px] leading-tight text-ink-faint" data-tip="The last time this name was seen in the server's cache.">seen ~{{lastSeen}}</div>{{/if}}
+              {{#if lastSeen}}<div class="mt-0.5 text-[11px] leading-tight text-ink-faint" data-tip="The last time this player was on the server.">{{#if online}}Online now{{else}}Seen <span data-ts-ago="{{lastSeen}}">{{lastSeen}}</span>{{/if}}</div>{{/if}}
             </td>
             {{! Off-state chips keep full opacity - dimming reads as disabled,
                 and genuinely disabled composers already use opacity for that. }}

@@ -174,6 +174,31 @@ function setPublicApiEnabled(on) {
   return Boolean(on);
 }
 
+// ---------------------------------------------------------------------------
+// Analytics: how long chat/death/advancement/command events are kept. Player
+// stats and play time are never pruned by this.
+
+const EVENT_RETENTION_KEY = 'analytics.eventRetentionDays';
+const EVENT_RETENTION_CHOICES = [30, 90, 365, 'forever'];
+const EVENT_RETENTION_DEFAULT = 90;
+
+/** Days to keep player events, or null for Forever. */
+function getEventRetentionDays() {
+  const v = get(EVENT_RETENTION_KEY, EVENT_RETENTION_DEFAULT);
+  if (v === 'forever') return null;
+  return EVENT_RETENTION_CHOICES.includes(v) ? v : EVENT_RETENTION_DEFAULT;
+}
+
+/** Store the event retention (30, 90, 365 or 'forever'). Returns the days or null. */
+function setEventRetentionDays(value) {
+  const v = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  if (!EVENT_RETENTION_CHOICES.includes(v)) {
+    throw httpError(400, 'Choose 30 days, 90 days, 1 year, or forever.');
+  }
+  set(EVENT_RETENTION_KEY, v);
+  return getEventRetentionDays();
+}
+
 /** A BCP-47 locale for date/number formatting, from host language + chosen country. */
 function resolveLocale() {
   let sysLoc = 'en-US';
@@ -279,6 +304,8 @@ module.exports = {
   setPublicHost,
   publicAddress,
   normalizeHost,
+  getEventRetentionDays,
+  setEventRetentionDays,
   isPublicApiEnabled,
   setPublicApiEnabled,
   getTimezone,

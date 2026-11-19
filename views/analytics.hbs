@@ -1,0 +1,131 @@
+{{> page-header heading="ANALYTICS" sub="Play time, players, and peaks across your servers, from the sessions the panel has recorded."}}
+
+{{#if hasServers}}
+<div id="ag-root" data-admin="{{#if isAdmin}}1{{else}}0{{/if}}">
+
+  {{! Toolbar: wraps on phones, sticks under the topbar from lg up. }}
+  <div class="card mb-4 flex flex-wrap items-center gap-3 p-3 lg:sticky lg:top-14 lg:z-10" id="ag-toolbar">
+    <details class="relative" id="ag-servers">
+      <summary class="btn btn-sm cursor-pointer list-none" id="ag-servers-label">{{{icon 'server' 'size-3.5'}}} <span id="ag-servers-text">All Servers</span></summary>
+      <div class="absolute left-0 top-full z-[68] mt-1 max-h-72 w-64 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-md border border-line bg-raised p-2 shadow-overlay">
+        <div class="mb-1 flex gap-1 border-b border-line pb-2">
+          <button type="button" class="btn btn-ghost btn-sm" id="ag-servers-all">Select All</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ag-servers-none">Clear</button>
+        </div>
+        {{#each pickable}}
+          <label class="flex cursor-pointer items-center gap-2 rounded-sm px-1 py-1.5 text-sm hover:bg-inset" data-server-opt data-deleted="{{#if deleted}}1{{else}}0{{/if}}" {{#if deleted}}hidden{{/if}}>
+            <input type="checkbox" value="{{id}}" checked>
+            <span class="min-w-0 flex-1 truncate">{{name}}</span>
+            {{#if deleted}}<span class="badge">Deleted</span>{{/if}}
+          </label>
+        {{/each}}
+      </div>
+    </details>
+
+    <label class="flex cursor-pointer items-center gap-2 text-sm">
+      <span class="msm-toggle"><input type="checkbox" id="ag-deleted"><span></span></span>
+      Include Deleted Servers
+    </label>
+
+    <div class="flex flex-wrap items-center gap-1 sm:ml-auto" role="group" aria-label="Time range" id="ag-ranges">
+      <button type="button" class="chip" data-range="24h" aria-pressed="false">24h</button>
+      <button type="button" class="chip" data-range="7d" aria-pressed="false">7d</button>
+      <button type="button" class="chip" data-range="30d" aria-pressed="true">30d</button>
+      <button type="button" class="chip" data-range="90d" aria-pressed="false">90d</button>
+      <button type="button" class="chip" data-range="all" aria-pressed="false">All</button>
+    </div>
+  </div>
+
+  <nav class="mb-4 flex flex-nowrap items-center gap-0.5 overflow-x-auto border-b border-line" role="tablist" aria-label="Analytics views" id="ag-tabs">
+    <button type="button" role="tab" data-tab="overview" aria-selected="true" class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-grass-500 px-3 py-2.5 text-sm font-medium text-ink transition">{{{icon 'chart-line' 'size-4'}}} Overview</button>
+    <button type="button" role="tab" data-tab="servers" aria-selected="false" class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-3 py-2.5 text-sm font-medium text-ink-faint transition hover:text-ink">{{{icon 'server' 'size-4'}}} Servers</button>
+    <button type="button" role="tab" data-tab="players" aria-selected="false" class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-3 py-2.5 text-sm font-medium text-ink-faint transition hover:text-ink">{{{icon 'users' 'size-4'}}} Players</button>
+  </nav>
+
+  {{! ---- Overview ---- }}
+  <section data-panel="overview" role="tabpanel" class="space-y-4">
+    <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" id="ag-tiles">
+      <div class="card p-3"><div class="eyebrow">Play Time</div><div class="mt-1 text-xl font-semibold tabular-nums" id="ag-t-play">…</div></div>
+      <div class="card p-3"><div class="eyebrow">Unique Players</div><div class="mt-1 text-xl font-semibold tabular-nums" id="ag-t-players">…</div></div>
+      <div class="card p-3"><div class="eyebrow">Peak Online</div><div class="mt-1 text-xl font-semibold tabular-nums" id="ag-t-peak">…</div><div class="mt-0.5 text-xs text-ink-faint" id="ag-t-peak-at"></div></div>
+      <div class="card p-3"><div class="eyebrow">Sessions</div><div class="mt-1 text-xl font-semibold tabular-nums" id="ag-t-sessions">…</div></div>
+      <div class="card col-span-2 p-3 md:col-span-1"><div class="eyebrow">Busiest Server</div><div class="mt-1 truncate text-xl font-semibold" id="ag-t-busiest">…</div><div class="mt-0.5 text-xs text-ink-faint" id="ag-t-busiest-play"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="flex flex-wrap items-center gap-2 border-b border-line p-3">
+        <h3 class="font-semibold">Players Online</h3>
+        <label class="ml-auto flex cursor-pointer items-center gap-2 text-sm">
+          <span class="msm-toggle"><input type="checkbox" id="ag-split"><span></span></span>
+          Split by Server
+        </label>
+      </div>
+      <div class="relative h-64 p-3"><canvas id="ag-online-chart" role="img" aria-label="Players online over time"></canvas></div>
+      <p class="hidden p-6 text-center text-sm text-ink-faint" id="ag-online-empty">No players were online in this range.</p>
+    </div>
+
+    <div class="card">
+      <div class="border-b border-line p-3"><h3 class="font-semibold">When Players Are Online</h3></div>
+      <div class="p-3" id="ag-heat"></div>
+      <p class="help border-t border-line p-3">Averaged over the selected range, in the panel's time zone.</p>
+    </div>
+
+    <div class="grid items-start gap-4 lg:grid-cols-2">
+      <div class="card">
+        <div class="border-b border-line p-3"><h3 class="font-semibold">Play Time by Server</h3></div>
+        <div class="p-3" id="ag-bars"></div>
+      </div>
+      <div class="card">
+        <div class="border-b border-line p-3"><h3 class="font-semibold">Top Players</h3></div>
+        <ol class="divide-y divide-line" id="ag-top"></ol>
+      </div>
+    </div>
+  </section>
+
+  {{! ---- Servers ---- }}
+  <section data-panel="servers" role="tabpanel" hidden>
+    <div id="ag-servers-list">
+      <div class="card overflow-x-auto">
+        <table class="table-base table-stack">
+          <thead><tr>
+            <th data-th="Server"><button type="button" class="font-semibold" data-sort="name">Server</button></th>
+            <th class="text-right" data-th="Players"><button type="button" class="font-semibold" data-sort="players">Players</button></th>
+            <th class="text-right" data-th="Play Time"><button type="button" class="font-semibold" data-sort="playtime">Play Time</button></th>
+            <th class="text-right" data-th="Peak Online"><button type="button" class="font-semibold" data-sort="peak">Peak Online</button></th>
+            <th class="text-right" data-th="Avg TPS">Avg TPS</th>
+            <th class="text-right" data-th="Last Active"><button type="button" class="font-semibold" data-sort="lastActive">Last Active</button></th>
+          </tr></thead>
+          <tbody id="ag-servers-body"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="ag-server-detail" hidden class="space-y-4"></div>
+  </section>
+
+  {{! ---- Players ---- }}
+  <section data-panel="players" role="tabpanel" hidden>
+    <div id="ag-players-list">
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <input class="input w-full max-w-xs" type="search" id="ag-q" placeholder="Search players…" autocomplete="off" aria-label="Search players">
+      </div>
+      <div class="card overflow-x-auto">
+        <table class="table-base table-stack">
+          <thead><tr>
+            <th data-th="Player"><button type="button" class="font-semibold" data-sort="name">Player</button></th>
+            <th class="text-right" data-th="Play Time"><button type="button" class="font-semibold" data-sort="playtime">Play Time</button></th>
+            <th data-th="Servers"><button type="button" class="font-semibold" data-sort="serverCount">Servers</button></th>
+            <th class="text-right" data-th="Last Seen"><button type="button" class="font-semibold" data-sort="lastSeen">Last Seen</button></th>
+          </tr></thead>
+          <tbody id="ag-players-body"></tbody>
+        </table>
+      </div>
+      <div class="mt-3 text-center"><button type="button" class="btn" id="ag-more" hidden>Load More</button></div>
+    </div>
+    <div id="ag-player-detail" hidden class="space-y-4"></div>
+  </section>
+</div>
+<script src="/vendor/chart.umd.js"></script>
+<script type="module" src="/js/pages/analytics-global.js"></script>
+{{else}}
+  {{> empty-state iconName='chart-column' title='No Analytics Yet' message='Create a server and let players join. Their play time shows up here.'}}
+{{/if}}

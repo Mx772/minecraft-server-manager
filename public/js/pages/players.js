@@ -9,6 +9,7 @@ import { withBusy } from '../lib/loading.js';
 import { PLAYER_NAME_RE } from '../lib/playerName.js';
 import { escapeHtml as esc } from '../lib/format.js';
 import { renderPlayerHead } from '../lib/playerHead.js';
+import { timeAgo, formatDateTime } from '../lib/datetime.js';
 
 const root = document.querySelector('[data-players-root]');
 if (root) init(root);
@@ -111,8 +112,16 @@ function init(root) {
     if (d.lastSeen) {
       const seen = document.createElement('div');
       seen.className = 'mt-0.5 text-[11px] leading-tight text-ink-faint';
-      seen.dataset.tip = "The last time this name was seen in the server's cache.";
-      seen.textContent = `seen ~${d.lastSeen}`;
+      seen.dataset.tip = 'The last time this player was on the server.';
+      if (d.online === '1') {
+        seen.textContent = 'Online now';
+      } else {
+        seen.append('Seen ');
+        const t = document.createElement('span');
+        t.title = formatDateTime(d.lastSeen);
+        t.textContent = timeAgo(d.lastSeen) || d.lastSeen;
+        seen.append(t);
+      }
       append(seen);
     }
   }

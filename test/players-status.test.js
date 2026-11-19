@@ -84,8 +84,9 @@ test('roster status column renders Joined / Whitelisted / Banned with enforcemen
   assert.doesNotMatch(r.text, /join blocked/i);
 
   // The seen line and last-seen attribute survive for the joined-but-not-whitelisted player.
-  assert.match(r.text, /data-last-seen="2027-01-01"/);
-  assert.match(r.text, /seen ~2027-01-01/);
+  // usercache expiresOn is last login + 30 days, so the fallback is that minus a month.
+  assert.match(r.text, /data-last-seen="2026-12-02T00:00:00.000Z"/);
+  assert.match(r.text, /Seen <span data-ts-ago="2026-12-02T00:00:00.000Z">/);
 });
 
 test('enforced whitelist turns un-whitelisted players into "Not whitelisted, join blocked"', async () => {

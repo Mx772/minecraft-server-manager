@@ -333,6 +333,7 @@ router.delete(
           actor,
           keepWorld: req.query.deleteFiles !== 'true' && req.query.keepFiles !== 'false',
           keepBackups: req.query.deleteBackups !== 'true' && req.query.keepBackups !== 'false',
+          keepPlayerStats: req.query.keepPlayerStats === 'true',
         })
     );
     res.json({ ok: true, freedBytes });
@@ -736,6 +737,25 @@ router.post(
     }
     if (country !== undefined) settingsService.setCountry(country);
     res.json({ ok: true, localization: settingsService.localization() });
+  })
+);
+
+// ---- Analytics: how long player events are kept ----
+router.post(
+  '/settings/analytics',
+  requireRoleKeys('admin'),
+  asyncHandler((req, res, next) => {
+    const { eventRetentionDays } = z
+      .object({ eventRetentionDays: z.union([z.literal(30), z.literal(90), z.literal(365), z.literal('forever')]) })
+      .parse(req.body);
+    const days = settingsService.setEventRetentionDays(eventRetentionDays);
+    eventsService.recordEvent({
+      actor: req.user.username,
+      type: 'config-changed',
+      summary: days === null ? 'Server events are now kept forever.' : `Server events are now kept for ${days} days.`,
+    });
+    logger.info('Changed the event retention.', { days, actor: req.user.username });
+    res.json({ ok: true, eventRetentionDays: days === null ? 'forever' : days });
   })
 );
 
