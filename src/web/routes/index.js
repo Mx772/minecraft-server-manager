@@ -49,6 +49,7 @@ const SERVER_TABS = [
   'inventory',
   'analytics',
   'mods',
+  'pack-setup',
   'updates',
   'map',
   'files',
@@ -73,7 +74,7 @@ const TAB_GROUPS = [
   { key: 'overview', label: 'Overview', icon: 'layout-dashboard', tabs: ['overview'] },
   { key: 'console', label: 'Console', icon: 'terminal', tabs: ['console', 'chat', 'commands'] },
   { key: 'players', label: 'Players', icon: 'users', tabs: ['players', 'inventory', 'analytics'] },
-  { key: 'mods', label: 'Mods', icon: 'puzzle', tabs: ['mods', 'updates'] },
+  { key: 'mods', label: 'Mods', icon: 'puzzle', tabs: ['mods', 'pack-setup', 'updates'] },
   { key: 'world', label: 'World', icon: 'earth', tabs: ['worlds', 'map', 'files'] },
   { key: 'backups', label: 'Backups', icon: 'archive', tabs: ['backups'] },
   { key: 'monitoring', label: 'Monitoring', icon: 'activity', tabs: ['history', 'metrics'] },
@@ -93,6 +94,7 @@ const SUB_LABELS = {
   analytics: 'Stats',
   worlds: 'Worlds',
   mods: 'Mods',
+  'pack-setup': 'Pack Setup',
   updates: 'Versions',
   map: 'Map',
   files: 'Files',
@@ -112,9 +114,13 @@ const ADMIN_ONLY_TABS = new Set(['chatbot']);
 const CAP_TABS = { files: 'files' };
 // Sub-nav entries that only make sense for some servers. Version compatibility
 // is answerable for mod loaders only (see services/compat.js appliesTo).
-const CONDITIONAL_TABS = { updates: (opts) => opts.modServer !== false };
+// Pack Setup (recommended settings + customizations) exists for modpack servers only.
+const CONDITIONAL_TABS = {
+  updates: (opts) => opts.modServer !== false,
+  'pack-setup': (opts) => opts.packServer === true,
+};
 
-function buildNav(id, tab, server, { isAdmin = false, perms = null, modServer = true } = {}) {
+function buildNav(id, tab, server, { isAdmin = false, perms = null, modServer = true, packServer = false } = {}) {
   const crashes = server && server.crashesUnread;
   const group = TAB_GROUPS.find((g) => g.tabs.includes(tab)) || TAB_GROUPS[0];
   const groups = TAB_GROUPS.map((g) => ({
@@ -128,7 +134,7 @@ function buildNav(id, tab, server, { isAdmin = false, perms = null, modServer = 
     (t) =>
       (isAdmin || !ADMIN_ONLY_TABS.has(t)) &&
       (!perms || !CAP_TABS[t] || perms[CAP_TABS[t]]) &&
-      (!CONDITIONAL_TABS[t] || CONDITIONAL_TABS[t]({ modServer }))
+      (!CONDITIONAL_TABS[t] || CONDITIONAL_TABS[t]({ modServer, packServer }))
   );
   const sub =
     visibleSubTabs.length > 1
@@ -495,6 +501,7 @@ router.get(
         isAdmin: req.user.role === 'admin',
         perms,
         modServer: require('../../services/compat').appliesTo(row.id),
+        packServer: Boolean(server.pack),
       }),
       perms,
       mods: [],
@@ -541,6 +548,9 @@ router.get(
       } catch {
         context.curseforgeEnabled = false;
       }
+    } else if (tab === 'pack-setup') {
+      // Only modpack servers have a pack to set up; send anyone else to Mods.
+      if (!server.pack) return res.redirect(`/servers/${row.id}/mods`);
     } else if (tab === 'updates') {
       // Reached directly on a plugin server: there is nothing to show, so send
       // the person to the tab this one sits beside.

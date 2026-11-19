@@ -73,9 +73,38 @@ Restoring a backup stops the server (verifying the container really stopped befo
 
 ## The panel's own database
 
-Server backups only cover each server's own folder. The panel's own database (`panel.db`, holding users, roles, 2FA secrets, schedules, pack pins, and history) is snapshotted separately on the daily maintenance timer:
+Server backups only cover each server's own folder. The panel's own state is backed up separately. That means the database (`panel.db`, holding users, roles, 2FA secrets, schedules, pack pins, settings, and history) plus the two key files it can't be used without: `.secret-key` (decrypts stored secrets such as API keys and chat-bridge tokens) and `.session-secret` (keeps people signed in). Server worlds are not included, so these snapshots are only a few MB.
 
-- `VACUUM INTO` writes a consistent, defragmented copy to `backups/_panel/` in the data folder; the newest **14** are kept.
-- On boot the panel runs `PRAGMA integrity_check` and logs loudly if it fails, pointing you at `backups/_panel` for the newest good copy.
+Each snapshot is a folder under `backups/_panel/` in the data folder, holding those files and a `manifest.json` that says when and why it was taken and which panel version took it. There are three kinds:
 
-Back up the whole data folder (it also contains `.secret-key`, the at-rest encryption key) and you've backed up everything.
+| Kind          | When                                                                                       | Kept      |
+| ------------- | ------------------------------------------------------------------------------------------ | --------- |
+| `pre-upgrade` | Automatically, when a new panel version needs to update the database, just before it does. | Newest 5  |
+| `nightly`     | On the daily maintenance timer.                                                            | Newest 14 |
+| `manual`      | When you run the backup command below.                                                     | Newest 10 |
+
+The pre-upgrade snapshot means updating the usual way (`docker compose pull && docker compose up -d`) is always reversible. You don't have to remember a step beforehand.
+
+To take one yourself, for example before trying a test build:
+
+```bash
+docker exec <panel container> node scripts/panel-backup.js          # take a snapshot
+docker exec <panel container> node scripts/panel-backup.js --list   # list snapshots
+```
+
+Outside Docker, run `node scripts/panel-backup.js` from the panel folder. It is safe to run while the panel is running.
+
+On boot the panel runs `PRAGMA integrity_check` and logs loudly if it fails, pointing you at `backups/_panel` for the newest good copy.
+
+### Rolling back an update
+
+If a new image misbehaves and you want the previous one back:
+
+1. Stop the panel: `docker compose down` (your Minecraft servers are separate containers and keep running).
+2. In the data folder, open `backups/_panel/` and pick the newest `…-pre-upgrade` folder. Its `manifest.json` shows the panel version it was taken from.
+3. Copy `panel.db`, `.secret-key`, and `.session-secret` from that folder into the top of the data folder, replacing the current ones, and delete `panel.db-wal` and `panel.db-shm` if they exist.
+4. Set `image:` in your compose file back to the previous tag (for example `:edge` or a `:v<version>` / `:sha-<commit>` tag) and run `docker compose up -d`.
+
+Anything changed in the panel since that snapshot (new users, edited schedules, history) is lost; server worlds are not affected. The same steps restore a `nightly` or `manual` snapshot.
+
+To back up absolutely everything, including server worlds and their backups, copy the whole data folder.

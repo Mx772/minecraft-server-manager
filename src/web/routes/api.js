@@ -2070,6 +2070,9 @@ router.use('/files', require('../middleware/auth').requireRole('admin'), require
 // Customizations (the user's own pack-file versions); same `files` gate as the file manager.
 router.use('/servers/:id/customizations', requireCap('files'), require('./customizations'));
 
+// Pack profiles (recommended per-pack config changes); writes need `settings`.
+router.use('/servers/:id/profile', requireCapForWrites('settings'), require('./profile'));
+
 // ---- Crash reports ----
 router.use('/servers/:id/crashes', requireCapForWrites('files'), require('./crashes'));
 

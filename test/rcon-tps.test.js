@@ -29,6 +29,21 @@ test('parses Forge `forge tps` overall line', () => {
   assert.equal(r.tps5, null);
 });
 
+test('parses NeoForge 1.20.5+ `neoforge tps`, using the Overall line not a dimension line', () => {
+  const r = parseTps(
+    [
+      'Overworld: 19.500 TPS (0.146 ms/tick)',
+      'The Nether: 20.000 TPS (0.019 ms/tick)',
+      'deeperdarker:otherside: 20.000 TPS (0.021 ms/tick)',
+      'Overall: 18.250 TPS (0.774 ms/tick)',
+    ].join('\n')
+  );
+  assert.equal(r.source, 'forge');
+  assert.equal(r.tps1, 18.25);
+  assert.equal(r.mspt, 0.774);
+  assert.equal(r.tps5, null);
+});
+
 test('parses Paper `mspt` avg from the "from last 5s" group', () => {
   const r = parseTps(
     'Server tick times (avg/min/max) from last 5s, 10s, 1m:\n1.23/0.90/4.50, 1.30/0.88/6.0, 1.4/0.9/9.9'

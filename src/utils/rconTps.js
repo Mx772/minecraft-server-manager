@@ -37,11 +37,18 @@ function parseTpsLine(text) {
   };
 }
 
-/** Forge / NeoForge `tps` - one "Overall:" summary line. */
+/**
+ * Forge / NeoForge `tps` - one "Overall:" summary line after the per-dimension
+ * lines. Two shapes exist:
+ *   older Forge / NeoForge  "Overall: Mean tick time: 3.456 ms. Mean TPS: 20.000"
+ *   NeoForge 1.20.5+        "Overall: 20.000 TPS (0.774 ms/tick)"
+ */
 function parseForgeTps(text) {
-  const m = /Overall\s*:?.*?Mean tick time:\s*(-?\d+(?:\.\d+)?)\s*ms.*?Mean TPS:\s*(-?\d+(?:\.\d+)?)/is.exec(text);
-  if (!m) return null;
-  return { tps1: Number(m[2]), tps5: null, tps15: null, mspt: Number(m[1]) };
+  const legacy = /Overall\s*:?.*?Mean tick time:\s*(-?\d+(?:\.\d+)?)\s*ms.*?Mean TPS:\s*(-?\d+(?:\.\d+)?)/is.exec(text);
+  if (legacy) return { tps1: Number(legacy[2]), tps5: null, tps15: null, mspt: Number(legacy[1]) };
+  const modern = /Overall\s*:\s*(-?\d+(?:\.\d+)?)\s*TPS\s*\(\s*(-?\d+(?:\.\d+)?)\s*ms\s*\/\s*tick\s*\)/i.exec(text);
+  if (modern) return { tps1: Number(modern[1]), tps5: null, tps15: null, mspt: Number(modern[2]) };
+  return null;
 }
 
 /** Paper `mspt` - "... from last 5s, 10s, 1m:" then a "avg/min/max, ..." line. */

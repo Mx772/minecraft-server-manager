@@ -21,6 +21,11 @@
   <div id="mods-pending" class="mb-4 hidden"></div>
 
   {{#if server.pack}}
+    {{! Filled by profile-hint.js when the pack's profile has suggestions to review. }}
+    <div class="notice notice-info mb-4 hidden flex-wrap items-center justify-between gap-2" data-prof-hint="{{server.id}}">
+      <span>Suggested settings are available for {{server.pack.name}}.</span>
+      <a class="btn btn-sm" href="/servers/{{server.id}}/pack-setup">Review</a>
+    </div>
     <div class="notice notice-info mb-4 max-w-prose text-xs">
       {{{icon 'info' 'size-4 mt-0.5 shrink-0'}}}
       <div><b class="text-link">Pack-managed</b> mods are installed by {{platformName server.pack.platform}} ({{server.pack.name}} {{server.pack.version}}).
@@ -113,17 +118,6 @@
     {{> empty-state iconName='puzzle' title='No Mods Installed Yet' message='Search Modrinth or CurseForge; add a mod, plugin, or datapack by URL; or import a zip with the buttons above. Custom content lives in the shared library and survives pack updates.'}}
   {{/if}}
 
-  {{#if server.pack}}
-    {{! Loaded by customizations-card.js from /api/servers/:id/customizations. }}
-    <div class="mt-6" data-cust-card="{{server.id}}">
-      {{#> settings/card heading="Customizations" desc="Files you changed on purpose, such as configs and scripts. The panel keeps a copy of each and puts it back over the pack's version every time the server starts, so your changes survive pack updates."}}
-        <div data-cust-body><p class="text-sm text-ink-faint">Loading…</p></div>
-        <template data-cust-empty>
-          {{> empty-state iconName='save' title='No Customizations Yet' message='Open Files, pick a config or script, and choose Add To Customizations.'}}
-        </template>
-      {{/settings/card}}
-    </div>
-  {{/if}}
 </div>
 <script type="module" src="/js/pages/mods.js"></script>
-{{#if server.pack}}<script type="module" src="/js/pages/customizations-card.js"></script>{{/if}}
+{{#if server.pack}}<script type="module" src="/js/pages/profile-hint.js"></script>{{/if}}

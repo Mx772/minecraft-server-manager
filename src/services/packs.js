@@ -278,6 +278,8 @@ async function applyPack(serverId, resolved, { actor = 'system', force = false }
     version: resolved.versionName,
     replaced: previous ? previous.pinned_version_name : null,
   });
+  // Mid-function require: packProfiles reaches back into the servers service. Only notifies, never applies.
+  require('./packProfiles').checkForSuggestions(serverId);
   return { previous: previous || null };
 }
 

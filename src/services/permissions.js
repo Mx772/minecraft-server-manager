@@ -207,6 +207,7 @@ const CAPABILITY_INFO = {
       'Change the game port players connect to.',
       'Upgrade the Minecraft version or the container image, set the icon and the console label, turn the live map on or off.',
       'Configure Discord, the public status page, and invites.',
+      "Choose and apply a modpack's recommended settings.",
     ],
     excludes:
       'Advanced Docker overrides and the chatbot, which stay admin-only. Rebuilding the container after a change (Power).',
@@ -223,6 +224,7 @@ const CAPABILITY_INFO = {
       'POST /api/servers/:id/map/enable',
       'POST /api/servers/:id/map/disable',
       'WRITES /api/servers/:id/integrations/*',
+      'WRITES /api/servers/:id/profile/*',
     ],
   },
   delete: {

@@ -100,7 +100,16 @@ test('a happy-path upgrade runs every step in order and records the event', asyn
   const steps = [];
   const out = await upgradePack('srv_up_ok', { onStep: (s) => steps.push(s), actor: 'tester' });
   assert.deepEqual(out, { ok: true, from: 'v100', to: 'v200', backupId: 'bk_1' });
-  assert.deepEqual(steps, ['resolving', 'backing-up', 'stopping', 'applying', 'recreating', 'monitoring', 'overlay']);
+  assert.deepEqual(steps, [
+    'resolving',
+    'backing-up',
+    'stopping',
+    'applying',
+    'recreating',
+    'monitoring',
+    'overlay',
+    'profile',
+  ]);
   assert.deepEqual(calls, [
     'resolvePack',
     'createBackup',
