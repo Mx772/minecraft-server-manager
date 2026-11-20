@@ -2112,6 +2112,9 @@ router.use('/servers/:id/customizations', requireCap('files'), require('./custom
 // Custom domains (DNS/SRV check, reachability); reading is open to anyone who can view the server, writes and checks need `settings`.
 router.use('/servers/:id/domains', requireCapForWrites('settings'), require('./domains'));
 
+// DNS providers (stored API tokens for managing SRV records); admin only.
+router.use('/dns-providers', requireRoleKeys('admin'), require('./dnsProviders'));
+
 // Pack profiles (recommended per-pack config changes); writes need `settings`.
 router.use('/servers/:id/profile', requireCapForWrites('settings'), require('./profile'));
 

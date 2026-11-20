@@ -21,7 +21,7 @@ test('create stores the token encrypted and list never leaks it', () => {
   assert.equal(JSON.stringify(listed).includes(TOKEN), false);
   assert.deepEqual(
     listed.find((x) => x.id === p.id),
-    { id: p.id, kind: 'cloudflare', label: 'My Cloudflare', tokenHint: '…abcd' }
+    { id: p.id, kind: 'cloudflare', label: 'My Cloudflare', tokenHint: '…abcd', linkedDomains: 0 }
   );
   assert.equal(providers.getConfig(p.id).config.token, TOKEN);
   assert.throws(() => providers.create({ kind: 'nope', label: 'x', token: 'y' }), /not supported/);
@@ -120,7 +120,7 @@ test('syncSrvRecord is a no-op without a provider and upserts with one', async (
   assert.equal(db.get("SELECT dns_provider_id FROM server_domains WHERE server_id = 'srv_dnsp'").dns_provider_id, null);
 });
 
-test('cloudflare upsertAddress creates then updates an A record', async () => {
+test('cloudflare upsertAddress creates an A record, and turns the proxy off on a matching one', async () => {
   const f = fakeCloudflare();
   const out = await cloudflare.upsertAddress(
     { token: TOKEN },
@@ -129,14 +129,20 @@ test('cloudflare upsertAddress creates then updates an A record', async () => {
   );
   assert.equal(out.action, 'created');
   const post = f.calls.find((c) => c.method === 'POST');
-  assert.deepEqual(post.body, { type: 'A', name: 'atm10.example.com', content: '198.51.100.4', ttl: 3600 });
-  const g = fakeCloudflare({ existing: { id: 'recA' } });
+  assert.deepEqual(post.body, {
+    type: 'A',
+    name: 'atm10.example.com',
+    content: '198.51.100.4',
+    ttl: 3600,
+    proxied: false,
+  });
+  const g = fakeCloudflare({ existing: { id: 'recA', content: '198.51.100.4', proxied: true } });
   const up = await cloudflare.upsertAddress(
     { token: TOKEN },
     { zoneId: 'zone1', type: 'A', name: 'atm10.example.com', value: '198.51.100.4' },
     { fetch: g.fetch }
   );
-  assert.equal(up.action, 'updated');
+  assert.equal(up.action, 'unproxied');
   assert.ok(g.calls.some((c) => c.method === 'PUT' && c.path.endsWith('/dns_records/recA')));
 });
 

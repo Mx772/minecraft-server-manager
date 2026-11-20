@@ -23,11 +23,19 @@ const { buildRecord } = require('../domains/srvCheck');
  * @property {(config: any, domain: string, deps?: { fetch?: typeof fetch }) => Promise<{ zoneId: string, zoneName: string } | null>} findZone
  * @property {(config: any, rec: { zoneId: string, name: string, port: number, target: string, priority?: number, weight?: number, ttl?: number }, deps?: { fetch?: typeof fetch }) => Promise<{ action: string }>} upsertSrv
  * @property {(config: any, rec: { zoneId: string, type: 'A'|'AAAA', name: string, value: string, ttl?: number }, deps?: { fetch?: typeof fetch }) => Promise<{ action: string }>} upsertAddress
+ * @property {(config: any, rec: { zoneId: string, name: string }, deps?: { fetch?: typeof fetch }) => Promise<Array<{ type: string, content: string, proxied: boolean }>>} getAddressRecords
  * @property {(config: any, rec: { zoneId: string, name: string }, deps?: { fetch?: typeof fetch }) => Promise<{ action: string }>} deleteSrv
  */
 
 /** @type {Record<string, DnsProvider>} */
 const PROVIDERS = { cloudflare: require('./cloudflare') };
+
+/** @type {typeof fetch | undefined} */
+let fetchOverride;
+/** Test seam: use this fetch for every provider call (pass undefined to reset). */
+function _setFetch(f) {
+  fetchOverride = f;
+}
 
 const tokenHint = (token) => `…${String(token).slice(-4)}`;
 
@@ -35,8 +43,39 @@ const tokenHint = (token) => `…${String(token).slice(-4)}`;
 function list() {
   return db.all('SELECT * FROM dns_providers ORDER BY created_at, id').map((r) => {
     const config = JSON.parse(secrets.tryDecrypt(r.config_cipher) || '{}');
-    return { id: r.id, kind: r.kind, label: r.label, tokenHint: config.token ? tokenHint(config.token) : null };
+    const linked = db.get('SELECT COUNT(*) AS n FROM server_domains WHERE dns_provider_id = ?', r.id);
+    return {
+      id: r.id,
+      kind: r.kind,
+      label: r.label,
+      tokenHint: config.token ? tokenHint(config.token) : null,
+      linkedDomains: linked ? linked.n : 0,
+    };
   });
+}
+
+/** Supported provider kinds, for a picker. */
+function kinds() {
+  return Object.values(PROVIDERS).map((p) => ({ kind: p.kind, label: p.label }));
+}
+
+/** Provider ids and labels only (no token hints), for server-level pickers. */
+function summaries() {
+  return db.all('SELECT id, kind, label FROM dns_providers ORDER BY created_at, id');
+}
+
+/**
+ * @param {{ kind: string, label: string, token: string }} input
+ * @param {{ actor?: string, fetch?: typeof fetch }} [opts]
+ * @param {{ kind: string, label: string, token: string }} input
+ */
+async function verifyAndCreate(input, { actor = 'system', fetch: doFetch } = {}) {
+  const provider = PROVIDERS[input.kind];
+  if (!provider) throw httpError(400, 'That DNS provider is not supported.');
+  const token = String(input.token || '').trim();
+  if (!token) throw httpError(400, 'An API token is required.');
+  await provider.verify({ token }, { fetch: doFetch || fetchOverride });
+  return create(input, { actor });
 }
 
 /** Decrypted config for a provider. Internal use only: never return this from a route. */
@@ -92,10 +131,21 @@ async function syncSrvRecord(serverId, domain, { actor = 'system', fetch: doFetc
   const publicHost = settings.getPublicHost();
   if (!provider || !server) throw httpError(404, 'Server or provider not found.');
   if (!publicHost) throw httpError(400, 'Set a public address in Settings before the SRV record can be managed.');
-  const deps = { fetch: doFetch };
+  const deps = { fetch: doFetch || fetchOverride };
   const zone = await provider.findZone(stored.config, domain, deps);
   if (!zone) throw httpError(404, `${domain} was not found in that DNS account.`);
   const rec = buildRecord(domain, server.port_game, publicHost);
+  // A hostname public host in this zone must not be proxied: Cloudflare's proxy
+  // only carries web traffic. Refuse before writing anything.
+  if (!rec.address && (publicHost.endsWith(`.${zone.zoneName}`) || publicHost === zone.zoneName)) {
+    const records = await provider.getAddressRecords(stored.config, { zoneId: zone.zoneId, name: publicHost }, deps);
+    if (records.some((r) => r.proxied)) {
+      throw httpError(
+        409,
+        `${publicHost} is proxied by Cloudflare, so players cannot connect through it. Turn off the proxy (grey cloud) for that record first.`
+      );
+    }
+  }
   // An IP-literal public host needs an A/AAAA record first: the SRV target is the domain itself.
   if (rec.address) {
     await provider.upsertAddress(
@@ -133,4 +183,15 @@ async function syncSrvRecord(serverId, domain, { actor = 'system', fetch: doFetc
   return { skipped: false, action: out.action };
 }
 
-module.exports = { PROVIDERS, list, create, remove, getConfig, syncSrvRecord };
+module.exports = {
+  PROVIDERS,
+  kinds,
+  summaries,
+  verifyAndCreate,
+  _setFetch,
+  list,
+  create,
+  remove,
+  getConfig,
+  syncSrvRecord,
+};

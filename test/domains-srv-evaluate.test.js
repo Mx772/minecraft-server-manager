@@ -157,3 +157,24 @@ test('SRV target equal to the domain compares through targetIps against an IP pu
   });
   assert.equal(r.state, 'points-here');
 });
+
+const CF = '104.21.5.5';
+test('cloudflare-proxied: an SRV target in Cloudflare ranges is flagged', () => {
+  const r = evaluate({ ...base, srv: srv(25570, 'proxied.example.com'), targetIps: [CF, '2606:4700::1'] });
+  assert.equal(r.state, 'cloudflare-proxied');
+  assert.equal(r.badge, 'badge-danger');
+  assert.equal(r.label, 'Proxied by Cloudflare');
+  assert.match(r.message, /^proxied\.example\.com resolves to Cloudflare's proxy/);
+});
+
+test('cloudflare-proxied: a domain with no SRV that is proxied is flagged', () => {
+  const r = evaluate({ ...base, gamePort: 25565, srv: [], domainIps: [CF] });
+  assert.equal(r.state, 'cloudflare-proxied');
+  assert.match(r.message, new RegExp(`^${D.replace(/\./g, '\\.')} resolves to Cloudflare`));
+});
+
+test('cloudflare-proxied: wrong port still wins, and a public host inside the ranges is not flagged', () => {
+  assert.equal(evaluate({ ...base, srv: srv(25566), targetIps: [CF] }).state, 'wrong-port');
+  const own = evaluate({ ...base, publicHost: 'x.example.net', publicIps: [CF], srv: srv(25570), targetIps: [CF] });
+  assert.equal(own.state, 'points-here');
+});

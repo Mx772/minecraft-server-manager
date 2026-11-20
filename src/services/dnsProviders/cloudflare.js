@@ -109,23 +109,49 @@ async function upsertSrv(config, { zoneId, name, port, target, priority = 0, wei
 }
 
 /**
- * Create or update the A/AAAA record `name` (a full name) so it points at `value`.
+ * A/AAAA records at a name, as { type, content, proxied }.
+ * @param {CloudflareConfig} config
+ * @param {{ zoneId: string, name: string }} rec
+ * @param {Deps} [deps]
+ */
+async function getAddressRecords(config, { zoneId, name }, deps) {
+  const base = `/zones/${encodeURIComponent(zoneId)}/dns_records`;
+  const out = [];
+  for (const type of ['A', 'AAAA']) {
+    const json = await call(config, 'GET', `${base}?type=${type}&name=${encodeURIComponent(name)}`, undefined, deps);
+    for (const r of json.result || []) out.push({ id: r.id, type, content: r.content, proxied: r.proxied === true });
+  }
+  return out;
+}
+
+/**
+ * Create the A/AAAA record `name` (a full name) pointing at `value`, never proxied.
+ * An existing record with different content is never overwritten (it could be
+ * the zone apex); one with the same content that is proxied is switched to DNS only.
  * @param {CloudflareConfig} config
  * @param {{ zoneId: string, type: 'A'|'AAAA', name: string, value: string, ttl?: number }} rec
  * @param {Deps} [deps]
  */
 async function upsertAddress(config, { zoneId, type, name, value, ttl = 3600 }, deps) {
   const base = `/zones/${encodeURIComponent(zoneId)}/dns_records`;
-  const q = `?type=${type}&name=${encodeURIComponent(name)}`;
-  const found = await call(config, 'GET', `${base}${q}`, undefined, deps);
+  const found = await call(config, 'GET', `${base}?type=${type}&name=${encodeURIComponent(name)}`, undefined, deps);
   const existing = (found.result && found.result[0]) || null;
-  const payload = { type, name, content: value, ttl };
-  if (existing) {
-    await call(config, 'PUT', `${base}/${encodeURIComponent(existing.id)}`, payload, deps);
-    return { action: 'updated' };
+  const payload = { type, name, content: value, ttl, proxied: false };
+  if (!existing) {
+    await call(config, 'POST', base, payload, deps);
+    return { action: 'created' };
   }
-  await call(config, 'POST', base, payload, deps);
-  return { action: 'created' };
+  if (existing.content !== value) {
+    throw httpError(
+      409,
+      `${name} already has an address record pointing at ${existing.content}. Change it in Cloudflare or remove it first.`
+    );
+  }
+  if (existing.proxied === true) {
+    await call(config, 'PUT', `${base}/${encodeURIComponent(existing.id)}`, payload, deps);
+    return { action: 'unproxied' };
+  }
+  return { action: 'unchanged' };
 }
 
 /** Delete the SRV record `name` if it exists. */
@@ -142,4 +168,13 @@ async function deleteSrv(config, { zoneId, name }, deps) {
   return { action: 'deleted' };
 }
 
-module.exports = { kind: 'cloudflare', label: 'Cloudflare', verify, findZone, upsertSrv, upsertAddress, deleteSrv };
+module.exports = {
+  kind: 'cloudflare',
+  label: 'Cloudflare',
+  verify,
+  findZone,
+  upsertSrv,
+  upsertAddress,
+  getAddressRecords,
+  deleteSrv,
+};

@@ -16,6 +16,7 @@ const { gather } = require('./resolve');
 const { evaluate } = require('./srvCheck');
 const slp = require('./slp');
 const external = require('./external');
+const dnsProviders = require('../dnsProviders');
 
 const MAX_DOMAINS_PER_SERVER = 10;
 // States where players can type the bare domain (no port) and get here.
@@ -68,7 +69,7 @@ function parseCheck(json) {
   }
 }
 
-function present(r) {
+function present(r, labels = {}) {
   return {
     domain: r.domain,
     isPrimary: r.is_primary === 1,
@@ -76,6 +77,7 @@ function present(r) {
     check: parseCheck(r.last_check_json),
     checkedAt: r.last_checked_at || null,
     dnsProviderId: r.dns_provider_id || null,
+    providerLabel: (r.dns_provider_id && labels[r.dns_provider_id]) || null,
   };
 }
 
@@ -92,9 +94,11 @@ function bedrockInfo(row) {
 /** @param {string} serverId */
 function list(serverId) {
   const row = serverRow(serverId);
+  const providers = dnsProviders.summaries();
+  const labels = Object.fromEntries(providers.map((p) => [p.id, p.label]));
   const domains = db
     .all('SELECT * FROM server_domains WHERE server_id = ? ORDER BY is_primary DESC, created_at, domain', serverId)
-    .map(present);
+    .map((r) => present(r, labels));
   const primary = domains.find((d) => d.isPrimary);
   return {
     domains,
@@ -102,6 +106,7 @@ function list(serverId) {
     gamePort: row.port_game,
     publicHost: settings.getPublicHost() || null,
     bedrock: bedrockInfo(row),
+    providers,
   };
 }
 
@@ -198,6 +203,7 @@ function setPrimary(serverId, domain, { actor = 'system' } = {}) {
 const CHANGE_SUMMARY = {
   'points-here': (d) => `${d} now points to this server.`,
   'wrong-port': (d) => `${d} now points to the wrong port.`,
+  'cloudflare-proxied': (d) => `${d} is now behind Cloudflare's proxy, so players cannot connect.`,
   'different-ip': (d) => `${d} now points at a different IP.`,
   'no-srv-needed': (d) => `${d} now resolves without needing an SRV record.`,
   'missing-srv': (d) => `${d} is now missing its SRV record.`,
@@ -304,22 +310,77 @@ async function reachability(serverId, domain, { mode = 'panel', ping = slp.ping,
 }
 
 /**
+ * Link a domain to a DNS provider (or unlink with null).
+ * @param {string} serverId
+ * @param {string} domain
+ * @param {string|null} providerId
+ */
+function setProvider(serverId, domain, providerId, { actor = 'system' } = {}) {
+  const row = mustHave(serverId, domain);
+  let label = null;
+  if (providerId) {
+    const p = dnsProviders.summaries().find((x) => x.id === providerId);
+    if (!p) throw httpError(404, 'That DNS provider was not found.');
+    label = p.label;
+  }
+  db.run(
+    'UPDATE server_domains SET dns_provider_id = ? WHERE server_id = ? AND domain = ?',
+    providerId,
+    serverId,
+    row.domain
+  );
+  recordEvent({
+    serverId,
+    actor,
+    type: providerId ? 'domain-provider-linked' : 'domain-provider-unlinked',
+    summary: providerId
+      ? `${row.domain} linked to the DNS provider ${label}.`
+      : `${row.domain} unlinked from its DNS provider.`,
+    details: { domain: row.domain },
+  });
+  return list(serverId);
+}
+
+/**
+ * Write the SRV (and address) record through the linked provider, then re-check.
+ * @param {string} serverId
+ * @param {string} domain
+ * @param {{ actor?: string, fetch?: typeof fetch, resolver?: import('./resolve').ResolverLike }} [opts]
+ */
+async function sync(serverId, domain, { actor = 'system', fetch: doFetch, resolver } = {}) {
+  const row = mustHave(serverId, domain);
+  if (!row.dns_provider_id) throw httpError(400, 'Link a DNS provider to this domain first.');
+  const out = await dnsProviders.syncSrvRecord(serverId, row.domain, { actor, fetch: doFetch });
+  const result = await check(serverId, row.domain, { actor, resolver });
+  return { sync: out, result };
+}
+
+/**
  * After a game port change: re-check this server's domains and return a warning
  * for each one whose SRV record no longer matches.
  * @param {string} serverId
  * @param {number} oldPort
  * @param {number} newPort
- * @param {{ actor?: string, resolver?: import('./resolve').ResolverLike }} [opts]
+ * @param {{ actor?: string, resolver?: import('./resolve').ResolverLike, fetch?: typeof fetch }} [opts]
  * @returns {Promise<string[]>}
  */
-async function afterPortChange(serverId, oldPort, newPort, { actor = 'system', resolver } = {}) {
+async function afterPortChange(serverId, oldPort, newPort, { actor = 'system', resolver, fetch: doFetch } = {}) {
   const warnings = [];
   for (const d of db.all('SELECT domain, dns_provider_id FROM server_domains WHERE server_id = ?', serverId)) {
-    // Provider automation hook (scaffold): a domain linked to a DNS provider would
-    // have its SRV record rewritten here. Nothing can link one yet, so this is
-    // dormant. Once a UI sets dns_provider_id, call:
-    //   await require('../dnsProviders').syncSrvRecord(serverId, d.domain, { actor });
-    // before re-checking, and skip the warning when the sync succeeds.
+    // A domain linked to a DNS provider gets its SRV record rewritten for the new
+    // port first. A failure never fails the port change: it becomes a warning.
+    if (d.dns_provider_id) {
+      try {
+        await dnsProviders.syncSrvRecord(serverId, d.domain, { actor, fetch: doFetch });
+      } catch (err) {
+        const reason = err && err.status && err.status < 500 ? ` ${err.message}` : '';
+        warnings.push(`${d.domain}'s SRV record could not be updated automatically.${reason}`);
+        logger.warn('Could not sync a domain SRV record after a port change.', {
+          serverId,
+          err: serializeError(err, { includeStack: false }),
+        });
+      }
+    }
     let result;
     try {
       result = await check(serverId, d.domain, { actor, resolver });
@@ -327,6 +388,9 @@ async function afterPortChange(serverId, oldPort, newPort, { actor = 'system', r
       logger.warn('Could not re-check a domain after a port change.', { serverId, err: serializeError(err) });
       continue;
     }
+    // A linked domain either synced (resolvers may still hold the old record for
+    // its TTL, so a stale answer is no reason to warn) or already warned above.
+    if (d.dns_provider_id) continue;
     if (result.state === 'wrong-port') {
       warnings.push(
         result.srv && result.srv.port === oldPort
@@ -335,6 +399,10 @@ async function afterPortChange(serverId, oldPort, newPort, { actor = 'system', r
       );
     } else if (result.state === 'missing-srv') {
       warnings.push(`${d.domain} has no SRV record for port ${newPort}. Create one so players can connect.`);
+    } else if (result.state === 'cloudflare-proxied') {
+      warnings.push(
+        `${d.domain} is behind Cloudflare's proxy, so players cannot connect. Turn off the proxy (grey cloud).`
+      );
     }
   }
   return warnings;
@@ -352,6 +420,8 @@ module.exports = {
   addressFor,
   reachability,
   afterPortChange,
+  setProvider,
+  sync,
   normalizeDomain,
   MAX_DOMAINS_PER_SERVER,
   _setResolver,

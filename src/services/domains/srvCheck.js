@@ -5,6 +5,8 @@
 
 const net = require('node:net');
 
+const { isCloudflareProxyIp } = require('./cloudflareRanges');
+
 const DEFAULT_JAVA_PORT = 25565;
 const RECORD_TTL = 3600;
 
@@ -18,7 +20,7 @@ const RECORD_TTL = 3600;
 
 /**
  * @typedef {object} Evaluation
- * @property {string} state    points-here | wrong-port | different-ip | no-srv-needed | missing-srv | not-found | resolver-error
+ * @property {string} state    cloudflare-proxied | points-here | wrong-port | different-ip | no-srv-needed | missing-srv | not-found | resolver-error
  * @property {string} badge    badge class: badge-ok | badge-warn | badge-danger | badge-info
  * @property {string} label    Title Case badge text
  * @property {string} message  one or two friendly sentences
@@ -30,6 +32,7 @@ const RECORD_TTL = 3600;
 const STATES = {
   'points-here': { badge: 'badge-ok', label: 'Points Here' },
   'wrong-port': { badge: 'badge-danger', label: 'Wrong Port' },
+  'cloudflare-proxied': { badge: 'badge-danger', label: 'Proxied by Cloudflare' },
   'different-ip': { badge: 'badge-warn', label: 'Different IP' },
   'no-srv-needed': { badge: 'badge-info', label: 'No SRV Needed' },
   'missing-srv': { badge: 'badge-warn', label: 'Missing SRV' },
@@ -74,6 +77,10 @@ function buildRecord(domain, gamePort, publicHost) {
 }
 
 const sameIps = (a, b) => a.some((ip) => b.includes(ip));
+// Behind Cloudflare's proxy and not simply the panel's own (public) address.
+const proxied = (ips, publicIps) => ips.some(isCloudflareProxyIp) && !sameIps(ips, publicIps);
+const proxiedMessage = (name) =>
+  `${name} resolves to Cloudflare's proxy, which can't carry Minecraft traffic. Turn off the proxy (grey cloud) for that record in Cloudflare.`;
 
 /**
  * @param {object} p
@@ -124,6 +131,9 @@ function evaluate({
         `The SRV record sends players to port ${best.port}, but this server listens on ${gamePort}. Update the record to use port ${gamePort}.`
       );
     }
+    if (targetIps.length && proxied(targetIps, publicIps)) {
+      return out('cloudflare-proxied', proxiedMessage(best.name));
+    }
     if (!publicHost || !publicIps.length) {
       // Nothing to compare the IPs with, so the port is the only thing we can
       // verify. Treat a matching port as pointing here and say what was skipped.
@@ -153,6 +163,7 @@ function evaluate({
       record: buildRecord(domain, gamePort, publicHost),
     });
   }
+  if (proxied(domainIps, publicIps)) return out('cloudflare-proxied', proxiedMessage(domain));
   if (gamePort === DEFAULT_JAVA_PORT) {
     if (publicIps.length && !sameIps(domainIps, publicIps)) {
       return out(

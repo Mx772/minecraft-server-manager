@@ -9,11 +9,13 @@ const express = require('express');
 const { z } = require('zod');
 const asyncHandler = require('../middleware/asyncHandler');
 const domains = require('../../services/domains');
+const { requireRole } = require('../middleware/auth');
 
 const router = express.Router({ mergeParams: true });
 
 const actorOf = (req) => req.user.username;
 const addBody = z.object({ domain: z.string().trim().min(1, 'Enter a domain.').max(300) });
+const providerBody = z.object({ providerId: z.string().min(1).max(64).nullable() });
 const reachBody = z.object({ mode: z.enum(['panel', 'external']).default('panel') });
 
 router.get('/', (req, res) => {
@@ -55,6 +57,27 @@ router.post(
   asyncHandler(async (req, res) => {
     const { mode } = reachBody.parse(req.body || {});
     res.json({ ok: true, reachability: await domains.reachability(req.params.id, req.params.domain, { mode }) });
+  })
+);
+
+// A provider token can write records across a whole DNS zone, so linking one is admin-only.
+router.put(
+  '/:domain/provider',
+  requireRole('admin'),
+  asyncHandler((req, res) => {
+    const { providerId } = providerBody.parse(req.body || {});
+    res.json({
+      ok: true,
+      ...domains.setProvider(req.params.id, req.params.domain, providerId, { actor: actorOf(req) }),
+    });
+  })
+);
+
+router.post(
+  '/:domain/sync',
+  asyncHandler(async (req, res) => {
+    const out = await domains.sync(req.params.id, req.params.domain, { actor: actorOf(req) });
+    res.json({ ok: true, ...out, ...domains.list(req.params.id) });
   })
 );
 
