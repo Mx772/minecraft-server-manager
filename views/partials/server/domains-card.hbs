@@ -1,5 +1,5 @@
 {{! Rendered client-side by domains-card.js from the JSON below and the /api/servers/:id/domains responses. }}
-<div class="card p-4" id="domains-card" data-domains-card="{{server.id}}" data-can-edit="{{#if perms.settings}}true{{else}}false{{/if}}" data-external="{{#if externalReachabilityCheck}}true{{else}}false{{/if}}">
+<div class="card p-4" id="domains-card" data-domains-card="{{server.id}}" data-can-edit="{{#if perms.settings}}true{{else}}false{{/if}}" data-admin="{{#if isAdmin}}true{{else}}false{{/if}}" data-external="{{#if externalReachabilityCheck}}true{{else}}false{{/if}}">
   <h3 class="font-semibold">Domains</h3>
   <p class="help mt-1 max-w-prose">Friendly names players type, like atm10.example.com. The panel checks each one's DNS records point at this server.</p>
   {{#unless domains.publicHost}}

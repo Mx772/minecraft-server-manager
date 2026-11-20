@@ -127,6 +127,9 @@ function init() {
     }
   });
 
+  // ---- DNS providers ----
+  initDnsProviders();
+
   // ---- Public API (/api/v1) ----
   document.getElementById('public-api-enabled')?.addEventListener('change', async (e) => {
     const el = e.currentTarget;
@@ -247,6 +250,142 @@ function init() {
       content,
       actions: [{ label: 'Done', kind: 'primary', onClick: () => setTimeout(() => location.reload(), 300) }],
     });
+  }
+
+  function initDnsProviders() {
+    const table = document.getElementById('dns-providers-table');
+    if (!table) return;
+    const tbody = table.querySelector('tbody');
+    const empty = document.getElementById('dns-providers-empty');
+    const readJson = (id) => {
+      try {
+        return JSON.parse(document.getElementById(id)?.textContent || '[]');
+      } catch {
+        return [];
+      }
+    };
+    let providers = readJson('dns-providers-data');
+    const kinds = readJson('dns-provider-kinds');
+
+    function render() {
+      tbody.replaceChildren();
+      for (const p of providers) {
+        const tr = document.createElement('tr');
+        const cell = (th, text, cls) => {
+          const td = document.createElement('td');
+          td.dataset.th = th;
+          if (cls) td.className = cls;
+          td.textContent = text;
+          tr.append(td);
+          return td;
+        };
+        cell('Name', p.label, 'font-medium');
+        cell('Provider', kinds.find((k) => k.kind === p.kind)?.label || p.kind);
+        cell('Token', p.tokenHint || '', 'font-mono text-xs');
+        cell('Domains', String(p.linkedDomains ?? 0));
+        const act = cell('', '', 'text-right');
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'btn btn-ghost btn-sm text-danger';
+        rm.textContent = 'Remove';
+        rm.addEventListener('click', () => removeProvider(p, rm));
+        act.append(rm);
+        tbody.append(tr);
+      }
+      table.parentElement.classList.toggle('hidden', !providers.length);
+      empty.classList.toggle('hidden', providers.length > 0);
+    }
+
+    async function removeProvider(p, btn) {
+      const ok = await confirmDialog({
+        title: `Remove ${p.label}?`,
+        message: `Remove ${p.label}? Domains using it go back to manual DNS.`,
+        confirmLabel: 'Remove Provider',
+        danger: true,
+      });
+      if (!ok) return;
+      await withBusy(btn, 'Removing…', async () => {
+        try {
+          const res = await fetch(`/api/dns-providers/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.ok === false) {
+            toast(data.error || friendlyError(res, { action: 'remove that provider' }), { kind: 'error' });
+            return;
+          }
+          providers = data.providers;
+          render();
+          toast('DNS provider removed.');
+        } catch (err) {
+          toast(friendlyError(err, { action: 'remove that provider' }), { kind: 'error' });
+        }
+      });
+    }
+
+    document.getElementById('dns-provider-add')?.addEventListener('click', () => {
+      const content = document.createElement('div');
+      content.className = 'space-y-3';
+      const field = (label, input, help) => {
+        const wrap = document.createElement('div');
+        const l = document.createElement('label');
+        l.className = 'label';
+        l.textContent = label;
+        l.htmlFor = input.id;
+        wrap.append(l, input);
+        if (help) {
+          const hp = document.createElement('p');
+          hp.className = 'help';
+          hp.textContent = help;
+          wrap.append(hp);
+        }
+        content.append(wrap);
+      };
+      const kind = document.createElement('select');
+      kind.className = 'input';
+      kind.id = 'dp-kind';
+      for (const k of kinds) kind.append(new Option(k.label, k.kind));
+      const label = document.createElement('input');
+      label.className = 'input';
+      label.id = 'dp-label';
+      label.autocomplete = 'off';
+      label.placeholder = 'e.g. My Cloudflare';
+      const token = document.createElement('input');
+      token.className = 'input font-mono';
+      token.id = 'dp-token';
+      token.type = 'password';
+      token.autocomplete = 'off';
+      field('Provider', kind);
+      field('Name', label);
+      field(
+        'API token',
+        token,
+        'Create a token in Cloudflare under My Profile, API Tokens with Zone.DNS Edit permission for the zones you use.'
+      );
+      openModal({
+        title: 'Add DNS Provider',
+        content,
+        actions: [
+          { label: 'Cancel', kind: 'ghost' },
+          {
+            label: 'Add Provider',
+            kind: 'primary',
+            busyLabel: 'Checking the token…',
+            onClick: async () => {
+              const res = await post('/api/dns-providers', {
+                kind: kind.value,
+                label: label.value.trim(),
+                token: token.value.trim(),
+              });
+              if (!res) return false;
+              providers = [...providers, res.provider];
+              render();
+              toast('DNS provider added.');
+            },
+          },
+        ],
+      });
+    });
+
+    render();
   }
 
   function escapeHtml(s) {

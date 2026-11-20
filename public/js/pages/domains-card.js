@@ -11,7 +11,14 @@ import { timeAgo } from '../lib/datetime.js';
 const card = document.querySelector('[data-domains-card]');
 if (card) init(card);
 
-const RECORD_STATES = new Set(['wrong-port', 'missing-srv', 'not-found', 'different-ip', 'resolver-error']);
+const RECORD_STATES = new Set([
+  'cloudflare-proxied',
+  'wrong-port',
+  'missing-srv',
+  'not-found',
+  'different-ip',
+  'resolver-error',
+]);
 
 /** Build an element: h('div', 'class', child, ...). Strings become text nodes. */
 function h(tag, cls, ...kids) {
@@ -33,6 +40,7 @@ function humanTtl(secs) {
 function init(root) {
   const serverId = root.dataset.domainsCard;
   const canEdit = root.dataset.canEdit === 'true';
+  const isAdmin = root.dataset.admin === 'true';
   const external = root.dataset.external === 'true';
   const listEl = root.querySelector('[data-domains-list]');
   const form = root.querySelector('[data-domains-add]');
@@ -177,8 +185,62 @@ function init(root) {
     btn('Check Reachability', '', (b) => checkReach(d.domain, 'panel', b));
     if (external) btn('Check From Outside', '', (b) => checkReach(d.domain, 'external', b));
     if (!d.isPrimary) btn('Make Primary', '', (b) => makePrimary(d.domain, b));
+    if (d.dnsProviderId) btn('Sync Record', '', (b) => syncRecord(d.domain, b));
     btn('Remove', 'btn-ghost text-danger', (b) => remove(d.domain, b));
     return wrap;
+  }
+
+  function providerControl(d) {
+    const providers = data.providers || [];
+    if (!providers.length) {
+      return h(
+        'p',
+        'mt-2 text-xs text-ink-faint',
+        'Add a DNS provider in Settings to update this record automatically. ',
+        Object.assign(h('a', 'text-link hover:underline', 'Open Settings'), { href: '/settings#network' })
+      );
+    }
+    const id = `dom-prov-${d.domain.replace(/[^a-z0-9]/gi, '-')}`;
+    const sel = h('select', 'input w-auto');
+    sel.id = id;
+    sel.append(new Option('Manual (none)', ''));
+    for (const p of providers) sel.append(new Option(p.label, p.id));
+    sel.value = d.dnsProviderId || '';
+    sel.addEventListener('change', async () => {
+      const providerId = sel.value || null;
+      sel.disabled = true;
+      const json = await call(
+        'PUT',
+        `/${encodeURIComponent(d.domain)}/provider`,
+        { providerId },
+        'change the DNS provider'
+      );
+      if (json) adopt(json);
+      else {
+        sel.value = d.dnsProviderId || '';
+        sel.disabled = false;
+      }
+    });
+    const label = h('label', 'text-xs text-ink-faint', 'DNS Provider');
+    label.htmlFor = id;
+    return h('div', 'mt-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2', label, sel);
+  }
+
+  const SYNC_WORDS = {
+    created: 'SRV record created.',
+    updated: 'SRV record updated.',
+    unchanged: 'SRV record was already correct.',
+    unproxied: 'SRV record is now DNS only.',
+  };
+
+  async function syncRecord(domain, b) {
+    await withBusy(b, 'Syncing…', async () => {
+      const json = await call('POST', `/${encodeURIComponent(domain)}/sync`, null, 'sync the DNS record');
+      if (!json) return;
+      adopt(json);
+      const action = json.sync && json.sync.action;
+      toast(SYNC_WORDS[action] || 'SRV record synced.');
+    });
   }
 
   function row(d) {
@@ -187,9 +249,19 @@ function init(root) {
     const head = h('div', 'flex flex-wrap items-center gap-2');
     head.append(h('span', 'min-w-0 break-all font-mono text-sm font-semibold', d.domain));
     if (d.isPrimary) head.append(h('span', 'chip', 'Primary'));
+    if (d.dnsProviderId) head.append(h('span', 'chip', `Managed by ${d.providerLabel || 'a DNS provider'}`));
     head.append(h('span', `badge ${c ? c.badge : 'badge-info'}`, c ? c.label : 'Not Checked'));
     li.append(head);
     if (c && c.message) li.append(h('p', 'mt-2 text-sm text-ink-soft', c.message));
+    if (c && c.state === 'cloudflare-proxied') {
+      li.append(
+        h(
+          'p',
+          'mt-1 text-sm text-ink-soft',
+          'In Cloudflare, click the orange cloud next to the record so it turns grey (DNS only).'
+        )
+      );
+    }
     const meta = [];
     if (d.checkedAt)
       meta.push(`Checked ${timeAgo(d.checkedAt.includes('T') ? d.checkedAt : `${d.checkedAt.replace(' ', 'T')}Z`)}.`);
@@ -211,6 +283,7 @@ function init(root) {
     if (external)
       li.append(h('p', 'mt-2 text-xs text-ink-faint', 'Check From Outside sends the domain name to mcsrvstat.us.'));
     if (canEdit) li.append(actions(d));
+    if (isAdmin) li.append(providerControl(d));
     return li;
   }
 

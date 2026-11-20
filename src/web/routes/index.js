@@ -1202,6 +1202,8 @@ router.get('/settings', requireRole('admin'), (req, res) => {
     retentionDefaults: backupRetention.DEFAULTS,
     publicApiEnabled: settings.isPublicApiEnabled(),
     externalReachabilityCheck: settings.isExternalReachabilityEnabled(),
+    dnsProviders: require('../../services/dnsProviders').list(),
+    dnsProviderKinds: require('../../services/dnsProviders').kinds(),
     apiTokens: require('../../services/apiTokens').listTokens(),
     serverOptions: require('../../services/servers')
       .listServers()

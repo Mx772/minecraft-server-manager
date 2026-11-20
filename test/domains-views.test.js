@@ -54,6 +54,13 @@ test('settings page renders the outside-check toggle', async () => {
   assert.equal(r.status, 200);
   assert.match(r.text, /id="external-reachability-check"/);
   assert.match(r.text, /Check Domains From Outside/);
+  assert.match(r.text, /id="network"/);
+  assert.match(r.text, /id="set-domain"/);
+  assert.match(r.text, /<h3 class="text-sm font-semibold text-ink">DNS Providers<\/h3>/);
+  assert.match(r.text, /id="dns-providers-table"/);
+  assert.match(r.text, /id="dns-providers-data">\[/);
+  assert.match(r.text, /id="dns-provider-kinds">[^<]*cloudflare/i);
+  assert.doesNotMatch(r.text, /Custom Domains/);
 });
 
 test('public status page shows the verified address', async () => {
@@ -61,4 +68,14 @@ test('public status page shows the verified address', async () => {
   const r = await app.req('GET', '/status/domv-page', { headers: html });
   assert.equal(r.status, 200);
   assert.match(r.text, /id="status-address"[^>]*>atm10\.example\.com</);
+});
+
+test('provider controls are flagged admin-only on the Domains card', async () => {
+  const admin = await app.req('GET', `/servers/${SID}`, { cookie, headers: html });
+  assert.match(admin.text, /data-admin="true"/);
+  const dnsProviders = require('../src/services/dnsProviders');
+  assert.ok(Array.isArray(dnsProviders.list()));
+  // A signed-out request never reaches the card, let alone the provider controls.
+  const anon = await app.req('GET', `/servers/${SID}`, { headers: html });
+  assert.doesNotMatch(anon.text, /data-admin=/);
 });
