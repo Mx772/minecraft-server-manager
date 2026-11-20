@@ -8,9 +8,6 @@ import { withBusy } from '../lib/loading.js';
 import { confirmDialog } from '../lib/confirm.js';
 import { timeAgo } from '../lib/datetime.js';
 
-const card = document.querySelector('[data-domains-card]');
-if (card) init(card);
-
 const RECORD_STATES = new Set([
   'cloudflare-proxied',
   'wrong-port',
@@ -279,7 +276,8 @@ function init(root) {
         )
       );
     }
-    li.append(reachBlock(reach.get(d.domain)));
+    const reachEl = reachBlock(reach.get(d.domain));
+    if (reachEl) li.append(reachEl); // append(null) would print the text "null"
     if (external)
       li.append(h('p', 'mt-2 text-xs text-ink-faint', 'Check From Outside sends the domain name to mcsrvstat.us.'));
     if (canEdit) li.append(actions(d));
@@ -367,3 +365,8 @@ function init(root) {
 
   render();
 }
+
+// Boot last: init() reads module-level constants (RECORD_STATES), which are not
+// initialised yet if this runs above their declarations.
+const card = document.querySelector('[data-domains-card]');
+if (card) init(card);
