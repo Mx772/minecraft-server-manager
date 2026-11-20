@@ -15,6 +15,15 @@
         {{statusLabel page.status}}
       </div>
     </div>
+    {{#if page.address}}
+      <div class="border-t border-line bg-raised p-3 text-center">
+        <div class="eyebrow">Server Address</div>
+        <div class="mt-1 flex flex-wrap items-center justify-center gap-2">
+          <span class="select-all break-all font-mono text-sm font-semibold" id="status-address">{{page.address}}</span>
+          <button class="btn btn-sm" data-copy-from="#status-address">{{{icon 'copy' 'size-3.5'}}} Copy</button>
+        </div>
+      </div>
+    {{/if}}
     <dl class="grid grid-cols-3 gap-px border-t border-line bg-line text-center tabular-nums">
       <div class="bg-raised p-3">
         <dt class="eyebrow">Version</dt>

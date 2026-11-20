@@ -77,6 +77,7 @@ test('server view is the lean shape only - no ports/env/rcon leak', async () => 
   const r = await app.req('GET', '/api/v1/servers', auth(tokAll));
   const s = r.json.servers.find((x) => x.id === 'srv_v1a');
   assert.deepEqual(Object.keys(s).sort(), [
+    'address',
     'cpuPct',
     'id',
     'memoryLimitMb',
@@ -337,4 +338,18 @@ test('GET /api/api-tokens returns public shapes only, never the secret', async (
     assert.equal('token_hash' in t, false);
   }
   assert.ok(r.json.tokens.some((t) => t.id === tokAllId));
+});
+
+test('server status carries the verified primary domain as address, null otherwise', async () => {
+  const domains = require('../src/services/domains');
+  const first = await app.req('GET', '/api/v1/servers/srv_v1a', auth(tokAll));
+  assert.equal(first.json.server ? first.json.server.address : first.json.address, null);
+  domains.add('srv_v1a', 'v1.example.com');
+  const unverified = await app.req('GET', '/api/v1/servers', auth(tokAll));
+  assert.equal(unverified.json.servers.find((s) => s.id === 'srv_v1a').address, null);
+  db.run("UPDATE server_domains SET last_state = 'points-here' WHERE server_id = 'srv_v1a'");
+  const verified = await app.req('GET', '/api/v1/servers', auth(tokAll));
+  assert.equal(verified.json.servers.find((s) => s.id === 'srv_v1a').address, 'v1.example.com');
+  assert.equal(verified.json.servers.find((s) => s.id === 'srv_v1b').address, null);
+  db.run("DELETE FROM server_domains WHERE server_id = 'srv_v1a'");
 });

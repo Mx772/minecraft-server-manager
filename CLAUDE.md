@@ -31,6 +31,7 @@ pnpm run build          # Tailwind CSS + esbuild client-JS bundle
 pnpm run test:watch     # re-run unit suite on save while iterating
 pnpm run test:smoke     # scripts/qa-sweep.js — live sweep against a RUNNING panel (needs QA_USER/QA_PASS)
 node --test test/foo.test.js   # run one test file
+pnpm run ui:shots       # headless render check: throwaway panel, desktop+phone screenshots, console errors
 pnpm run db:migrate     # apply src/db/migrations/* by hand
 ```
 
@@ -206,3 +207,5 @@ validation and error messages, and the docs — follows one house style (full de
 against a throwaway DB via [`test/helpers/app.js`](test/helpers/app.js) (`start`, `req`,
 `adminCookie`, `seedServer`) — `createApp()` wires only routes/middleware, background services live
 in `server.js`, so headless is safe.
+For anything that renders in a browser, also run the live check (`pnpm run ui:shots`; see
+[`.claude/skills/live-check/SKILL.md`](.claude/skills/live-check/SKILL.md)).

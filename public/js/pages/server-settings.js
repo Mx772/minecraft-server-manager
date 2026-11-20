@@ -348,6 +348,20 @@ function init(serverId) {
       }
       if (res && res.ok && data.ok) {
         toast(data.restarted ? `Restarted on port ${port}.` : `Port changed to ${port}. The server stays stopped.`);
+        // The page reloads straight after, so a toast would vanish unread: hold
+        // the reload until the person has seen which domains need a new SRV record.
+        const domainWarnings = data.domainWarnings || [];
+        if (domainWarnings.length) {
+          const { confirmDialog } = await import('../lib/confirm.js');
+          await confirmDialog({
+            title: 'Update your DNS records.',
+            message: domainWarnings.join(' '),
+            confirmLabel: 'Got It',
+            cancelLabel: 'Close',
+          });
+          reload(0);
+          return;
+        }
         reload();
         return;
       }

@@ -1,5 +1,6 @@
 <div class="grid gap-4 lg:grid-cols-3">
-  <div class="card p-4 lg:col-span-2">
+  <div class="min-w-0 space-y-4 lg:col-span-2">
+  <div class="card p-4">
     {{#if addresses.length}}
       <div class="mb-4 border-b border-line pb-4">
         <label class="label" for="ov-address">Server address <span class="text-xs font-normal text-ink-faint">(share this with players on your network)</span></label>
@@ -14,6 +15,7 @@
           {{/if}}
           <button class="btn" data-copy-from="#ov-address">{{{icon 'copy' 'size-4'}}} Copy Address</button>
         </div>
+        {{#if domainAddress}}<p class="help">Players can type this name in Minecraft's Add Server screen. Playing from your network instead? Pick a LAN address from the list.</p>{{/if}}
         <p class="help">Playing from the internet? Set up port forwarding or grab the full invite from the Invites tab (under Settings).</p>
       </div>
     {{/if}}
@@ -44,6 +46,8 @@
         </div>
       </div>
     {{/if}}
+  </div>
+  {{> server/domains-card}}
   </div>
 
   <div class="space-y-4">
@@ -92,5 +96,6 @@
   </div>
 </div>
 <script type="module" src="/js/pages/overview.js"></script>
+<script type="module" src="/js/pages/domains-card.js"></script>
 {{#if server.pack}}<script type="module" src="/js/pages/profile-hint.js"></script>{{/if}}
 

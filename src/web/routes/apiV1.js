@@ -15,6 +15,7 @@ const settings = require('../../services/settings');
 const servers = require('../../services/servers');
 const db = require('../../db');
 const liveCache = require('../../services/liveCache');
+const domainsService = require('../../services/domains');
 const { renderMetrics } = require('../../utils/promMetrics');
 
 const router = express.Router();
@@ -83,6 +84,8 @@ function serverStatusView(row) {
         : null
       : null,
     players: live.players ? { online: live.players.online, max: live.players.max } : null,
+    // The verified primary domain (no port), or null. A DB read only, no DNS.
+    address: domainsService.addressFor(row.id),
   };
 }
 

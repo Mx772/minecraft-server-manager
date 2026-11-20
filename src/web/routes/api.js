@@ -13,6 +13,7 @@ const multer = require('multer');
 const { z } = require('zod');
 const { boolish } = require('../../utils/boolish');
 const servers = require('../../services/servers');
+const domainsService = require('../../services/domains');
 const ports = require('../../services/ports');
 const mojang = require('../../services/mojang');
 const tasks = require('../../services/tasks');
@@ -538,12 +539,28 @@ router.put(
           .optional(),
       })
       .parse(req.body);
+    const oldPort = servers.getServer(req.params.id)?.port_game;
     const { server, changed, restarted } = await servers.changeGamePort(req.params.id, port, {
       actor: req.user.username,
       isAdmin: req.user.role === 'admin',
       restart: restart === true, // the person agreed to restart a running server
     });
-    res.json({ ok: true, changed, restarted, server: publicServer(server) });
+    // Custom domains may still point at the old port. Re-check them and say so;
+    // a failure here must never fail a port change that already happened.
+    let domainWarnings = [];
+    if (changed) {
+      try {
+        domainWarnings = await domainsService.afterPortChange(req.params.id, oldPort, server.port_game, {
+          actor: req.user.username,
+        });
+      } catch (err) {
+        logger.warn('Could not re-check custom domains after a port change.', {
+          serverId: req.params.id,
+          err: serializeError(err),
+        });
+      }
+    }
+    res.json({ ok: true, changed, restarted, server: publicServer(server), domainWarnings });
   })
 );
 
@@ -642,6 +659,7 @@ router.get('/settings', (req, res) => {
   res.json({
     ok: true,
     publicHost,
+    externalReachabilityCheck: settingsService.isExternalReachabilityEnabled(),
     cookieSecureWarning: cookieSecureWarning(publicHost),
     curseforge: { masked: apiKeys.maskedKey('curseforge') },
   });
@@ -701,7 +719,23 @@ router.post(
   '/settings',
   requireRoleKeys('admin'),
   asyncHandler((req, res, next) => {
-    const { publicHost } = z.object({ publicHost: z.string().max(255).optional() }).parse(req.body);
+    const { publicHost, externalReachabilityCheck } = z
+      .object({ publicHost: z.string().max(255).optional(), externalReachabilityCheck: z.boolean().optional() })
+      .parse(req.body);
+    // Each field is optional so the outside-check toggle can be saved without
+    // touching (or clearing) the public host, and vice versa.
+    if (externalReachabilityCheck !== undefined) {
+      settingsService.setExternalReachabilityEnabled(externalReachabilityCheck);
+    }
+    if (publicHost === undefined && externalReachabilityCheck !== undefined) {
+      const current = settingsService.getPublicHost();
+      return res.json({
+        ok: true,
+        publicHost: current,
+        externalReachabilityCheck: settingsService.isExternalReachabilityEnabled(),
+        cookieSecureWarning: cookieSecureWarning(current),
+      });
+    }
     const saved = settingsService.setPublicHost(publicHost || '');
     const warn = cookieSecureWarning(saved);
     if (warn) {
@@ -710,7 +744,12 @@ router.post(
         { publicHost: saved }
       );
     }
-    res.json({ ok: true, publicHost: saved, cookieSecureWarning: warn });
+    res.json({
+      ok: true,
+      publicHost: saved,
+      externalReachabilityCheck: settingsService.isExternalReachabilityEnabled(),
+      cookieSecureWarning: warn,
+    });
   })
 );
 
@@ -2069,6 +2108,12 @@ router.use('/files', require('../middleware/auth').requireRole('admin'), require
 
 // Customizations (the user's own pack-file versions); same `files` gate as the file manager.
 router.use('/servers/:id/customizations', requireCap('files'), require('./customizations'));
+
+// Custom domains (DNS/SRV check, reachability); reading is open to anyone who can view the server, writes and checks need `settings`.
+router.use('/servers/:id/domains', requireCapForWrites('settings'), require('./domains'));
+
+// DNS providers (stored API tokens for managing SRV records); admin only.
+router.use('/dns-providers', requireRoleKeys('admin'), require('./dnsProviders'));
 
 // Pack profiles (recommended per-pack config changes); writes need `settings`.
 router.use('/servers/:id/profile', requireCapForWrites('settings'), require('./profile'));
