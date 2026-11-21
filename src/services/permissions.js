@@ -182,6 +182,7 @@ const CAPABILITY_INFO = {
     help: 'Browse, edit, upload, and download server files, archived logs, and log bundles; export blueprints.',
     covers: [
       'Open the Files tab: browse, read, edit, upload, rename, and delete anything in the server folder, server.properties included.',
+      'Open the Configs tab to edit detected mod configs.',
       'Download archived and game logs and the log bundle; export the history as a file.',
       'Share, delete, and mark crash reports.',
       'Export this server as a blueprint.',
@@ -190,6 +191,9 @@ const CAPABILITY_INFO = {
     reach: [
       'ALL /api/servers/:id/files/*',
       'ALL /api/servers/:id/customizations/*',
+      'GET /api/servers/:id/configs',
+      'GET /api/servers/:id/configs/file',
+      'PUT /api/servers/:id/configs/file',
       'GET /api/servers/:id/logs/archived',
       'GET /api/servers/:id/logs/archived/:file',
       'GET /api/servers/:id/logs/game',
