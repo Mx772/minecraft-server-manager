@@ -1,5 +1,7 @@
 # Creating & managing servers
 
+<!-- description: Create, start, stop, rebuild and configure Minecraft servers in the panel: the creation wizard, settings, memory, and the game port. -->
+
 [← Back to docs index](README.md)
 
 ## Creating a server
@@ -48,6 +50,8 @@ Opening a server gives you a tabbed workspace:
 - **Settings**: **Configuration** (everything about how the server runs), plus the [integrations](integrations.md) (Discord, Status Page, Invites, and, for admins, Chatbot).
 
 The start, stop, and restart controls sit in the header above every tab. What you can do on each tab depends on your [permissions on that server](users-and-roles.md#per-server-permissions): for example, the **Files** sub-tab needs the Files permission, and sending console commands needs Console.
+
+The **Configs** tab groups discovered text configuration files by their detected mod when the match is unambiguous. Structured forms currently extract per-option descriptions from Lithium's bundled documentation; other mods' settings remain editable without those descriptions. Use Raw mode when the panel cannot safely render a format as fields.
 
 ![Server overview](images/server-overview.png)
 
