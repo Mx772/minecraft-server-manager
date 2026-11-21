@@ -2,11 +2,12 @@
 
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const yauzl = require('yauzl');
 const { dataPath, safeJoin } = require('../storage/pathGuard');
 const httpError = require('../utils/httpError');
-const { parseJarMeta } = require('./modIdentify');
+const jarMeta = require('./jarMeta');
 const mods = require('./mods');
+
+const logger = require('../logger')(path.basename(__filename));
 
 const CONFIG_EXTENSIONS = new Set([
   '.cfg',
@@ -25,71 +26,8 @@ const CONFIG_EXTENSIONS = new Set([
 const MAX_CONFIG_BYTES = 2 * 1024 * 1024;
 const MAX_CONFIG_FILES = 1500;
 const MAX_SCAN_DEPTH = 12;
-const MAX_JAR_BYTES = 64 * 1024 * 1024;
-const MAX_CONCURRENT_JAR_READS = 4;
-const docCache = new Map();
-const modMetadataCache = new Map();
-const modMetadataInFlight = new Map();
-const discoveredFiles = new Map();
-
-function cacheSet(cache, key, value, max = 2000) {
-  if (cache.size >= max && !cache.has(key)) cache.delete(cache.keys().next().value);
-  cache.set(key, value);
-}
-
-function readJarEntry(filePath, wanted) {
-  return new Promise((resolve) => {
-    yauzl.open(filePath, { lazyEntries: true }, (err, zip) => {
-      if (err) return resolve('');
-      let settled = false;
-      const done = (value) => {
-        if (settled) return;
-        settled = true;
-        zip.close();
-        resolve(value);
-      };
-      zip.on('error', () => done(''));
-      zip.on('end', () => done(''));
-      zip.on('entry', (entry) => {
-        if (entry.fileName !== wanted || entry.uncompressedSize > 2 * 1024 * 1024) return zip.readEntry();
-        zip.openReadStream(entry, (streamErr, stream) => {
-          if (streamErr) return done('');
-          const chunks = [];
-          stream.on('data', (chunk) => chunks.push(chunk));
-          stream.on('error', () => done(''));
-          stream.on('end', () => done(Buffer.concat(chunks).toString('utf8')));
-        });
-      });
-      zip.readEntry();
-    });
-  });
-}
-
-function parseLithiumDescriptions(markdown) {
-  const descriptions = {};
-  const sections = /###\s+`([^`]+)`[^\n]*\n([\s\S]*?)(?=\n###\s+`|$)/g;
-  for (const match of markdown.matchAll(sections)) {
-    const text = match[2]
-      .replace(/^\s*\(default:[^\n]*\)\s*/i, '')
-      .split(/\n\s*(?:Requirements:|Sub-options:|Incompatibilities:)/i)[0]
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/[`*_>#]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (text) descriptions[match[1]] = text.slice(0, 600);
-  }
-  return descriptions;
-}
-
-async function descriptionsForJar(abs, modId, stat) {
-  if (modId !== 'lithium') return {};
-  const cacheKey = `${abs}:${stat.size}:${stat.mtimeMs}`;
-  if (docCache.has(cacheKey)) return docCache.get(cacheKey);
-  const markdown = await readJarEntry(abs, 'lithium-fabric-mixin-config.md');
-  const descriptions = parseLithiumDescriptions(markdown);
-  cacheSet(docCache, cacheKey, descriptions, 100);
-  return descriptions;
-}
+const STAT_CONCURRENCY = 8;
+const JAR_FOLDERS = ['mods', 'plugins'];
 
 function configRoots(serverId) {
   const server = require('./servers').getServer(serverId);
@@ -99,79 +37,105 @@ function configRoots(serverId) {
   return ['config', 'defaultconfigs', `${safeLevel}/serverconfig`];
 }
 
-function modTokens(mod, metadata) {
+/** Normalized, space-separated lowercase words (letters and digits only). */
+function normalize(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** @param {(string | null | undefined)[]} names */
+function modTokens(names) {
   const tokens = new Set();
-  for (const token of [metadata?.modId, metadata?.name, mod.name, path.basename(mod.file, path.extname(mod.file))]) {
-    const normalized = String(token || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
+  for (const name of names) {
+    const normalized = normalize(name);
     if (normalized.length >= 3) tokens.add(normalized);
   }
   return [...tokens];
 }
 
-async function metadataForMods(serverId) {
-  const entries = await mods.listContent(serverId);
-  const modEntries = entries.filter((item) => item.kind === 'mod');
-  const detected = new Array(modEntries.length);
-  let nextIndex = 0;
-  async function inspectNext() {
-    while (nextIndex < modEntries.length) {
-      const index = nextIndex++;
-      detected[index] = await metadataForMod(serverId, modEntries[index]);
+/**
+ * Index mods by the first word of each token so a file only tests the mods
+ * whose first word it actually contains.
+ * @param {{ tokens: string[] }[]} mods
+ * @returns {Map<string, { index: number, token: string }[]>}
+ */
+function buildTokenIndex(mods) {
+  const byFirstWord = new Map();
+  mods.forEach((mod, index) => {
+    for (const token of mod.tokens) {
+      const first = token.split(' ')[0];
+      if (!byFirstWord.has(first)) byFirstWord.set(first, []);
+      byFirstWord.get(first).push({ index, token });
     }
-  }
-  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_JAR_READS, modEntries.length) }, inspectNext));
-  return detected;
+  });
+  return byFirstWord;
 }
 
-async function metadataForMod(serverId, entry) {
-  let metadata = null;
-  let descriptions = {};
-  if (entry.enabled && entry.file.toLowerCase().endsWith('.jar')) {
-    for (const folder of ['mods', 'plugins']) {
-      const abs = dataPath('servers', serverId, folder, entry.file);
-      try {
-        const stat = await fsp.stat(abs);
-        if (!stat.isFile() || stat.size > MAX_JAR_BYTES) continue;
-        const cacheKey = `${abs}:${stat.size}:${stat.mtimeMs}`;
-        let pending = modMetadataInFlight.get(cacheKey);
-        if (!pending) {
-          const cached = modMetadataCache.get(abs);
-          if (cached?.cacheKey === cacheKey) metadata = cached.metadata;
-          else {
-            pending = fsp.readFile(abs).then(parseJarMeta);
-            modMetadataInFlight.set(cacheKey, pending);
-            try {
-              metadata = await pending;
-              cacheSet(modMetadataCache, abs, { cacheKey, metadata });
-            } finally {
-              modMetadataInFlight.delete(cacheKey);
-            }
-          }
-        } else metadata = await pending;
-        if (metadata?.modId) descriptions = await descriptionsForJar(abs, metadata.modId, stat);
-        if (metadata) break;
-      } catch {
-        /* another content folder may contain this jar */
-      }
+/**
+ * Index of the single mod whose token appears as whole word(s) in the file
+ * path, or -1 when none or more than one match.
+ * @param {string} filePath
+ * @param {Map<string, { index: number, token: string }[]>} tokenIndex
+ */
+function singleMatch(filePath, tokenIndex) {
+  const words = normalize(filePath).split(' ');
+  const padded = ` ${words.join(' ')} `;
+  let match = -1;
+  for (const word of new Set(words)) {
+    for (const { index, token } of tokenIndex.get(word) || []) {
+      if (index === match || !padded.includes(` ${token} `)) continue;
+      if (match >= 0) return -1;
+      match = index;
     }
   }
-  return {
-    id: metadata?.modId || entry.file,
-    name: metadata?.name || entry.name,
-    version: entry.version,
-    tokens: modTokens(entry, metadata),
-    descriptions,
-  };
+  return match;
+}
+
+async function detectMods(serverId) {
+  const entries = await mods.listContent(serverId);
+  const modEntries = entries.filter((item) => item.kind === 'mod');
+  const refs = [];
+  for (const entry of modEntries) {
+    if (!entry.enabled || !entry.file.toLowerCase().endsWith('.jar')) continue;
+    for (const folder of JAR_FOLDERS) refs.push({ folder, file: entry.file });
+  }
+  const infos = await jarMeta.getMany(serverId, refs);
+  const detected = modEntries.map((entry) => {
+    let info = null;
+    if (entry.enabled) {
+      for (const folder of JAR_FOLDERS) {
+        const candidate = infos.get(`${folder}/${entry.file}`);
+        if (candidate?.meta) {
+          info = candidate;
+          break;
+        }
+      }
+    }
+    const metadata = info?.meta;
+    return {
+      id: metadata?.modId || entry.file,
+      name: metadata?.name || entry.name,
+      version: entry.version,
+      tokens: modTokens([
+        metadata?.modId,
+        metadata?.name,
+        entry.name,
+        path.basename(entry.file, path.extname(entry.file)),
+      ]),
+      descriptions: info?.descriptions || {},
+    };
+  });
+  return { detected, jars: infos.size };
 }
 
 async function scanConfigs(serverId) {
   const roots = configRoots(serverId);
-  const found = [];
+  const serverRoot = dataPath('servers', serverId);
+  const candidates = [];
   async function walk(rel, depth) {
-    if (depth > MAX_SCAN_DEPTH || found.length >= MAX_CONFIG_FILES) return;
+    if (depth > MAX_SCAN_DEPTH || candidates.length >= MAX_CONFIG_FILES) return;
     const abs = dataPath('servers', serverId, rel);
     let entries;
     try {
@@ -183,35 +147,32 @@ async function scanConfigs(serverId) {
       if (entry.name.startsWith('.')) continue;
       const child = `${rel}/${entry.name}`;
       if (entry.isSymbolicLink()) continue;
-      const childAbs = safeJoin(dataPath('servers', serverId), child);
+      const childAbs = safeJoin(serverRoot, child);
       if (entry.isDirectory()) await walk(child, depth + 1);
       else if (entry.isFile() && CONFIG_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-        const stat = await fsp.stat(childAbs).catch(() => null);
-        if (stat && stat.size <= MAX_CONFIG_BYTES) found.push({ path: child, size: stat.size });
-        if (found.length >= MAX_CONFIG_FILES) break;
+        candidates.push({ path: child, abs: childAbs });
+        if (candidates.length >= MAX_CONFIG_FILES) break;
       }
     }
   }
   for (const root of roots) await walk(root, 0);
+
+  const found = [];
+  let next = 0;
+  async function statNext() {
+    while (next < candidates.length) {
+      const { path: filePath, abs } = candidates[next++];
+      const stat = await fsp.stat(abs).catch(() => null);
+      if (stat && stat.size <= MAX_CONFIG_BYTES) found.push({ path: filePath, size: stat.size });
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(STAT_CONCURRENCY, candidates.length) }, statNext));
   return found.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function matchesConfig(file, mod) {
-  const pathTokens = file.path.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
-  const base = path
-    .basename(file.path)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ');
-  return mod.tokens.some((token) => {
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[^a-z0-9]+');
-    const pattern = new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`);
-    return pattern.test(pathTokens) || pattern.test(base);
-  });
-}
-
 async function list(serverId) {
-  const [detected, files] = await Promise.all([metadataForMods(serverId), scanConfigs(serverId)]);
-  const discovered = new Map();
+  const started = Date.now();
+  const [{ detected, jars }, files] = await Promise.all([detectMods(serverId), scanConfigs(serverId)]);
   const groups = detected.map((mod) => ({
     id: mod.id,
     name: mod.name,
@@ -219,39 +180,45 @@ async function list(serverId) {
     files: [],
     descriptions: mod.descriptions,
   }));
+  const tokenIndex = buildTokenIndex(detected);
   const unassigned = [];
   for (const file of files) {
-    discovered.set(file.path, {});
-    const matches = groups
-      .map((group, index) => (matchesConfig(file, detected[index]) ? index : -1))
-      .filter((i) => i >= 0);
-    if (matches.length === 1) {
-      groups[matches[0]].files.push(file);
-      discovered.set(file.path, groups[matches[0]].descriptions);
-    } else unassigned.push(file);
+    const match = singleMatch(file.path, tokenIndex);
+    if (match >= 0) groups[match].files.push(file);
+    else unassigned.push(file);
   }
-  discoveredFiles.set(serverId, discovered);
+  logger.debug('Listed mod configs.', { serverId, jars, files: files.length, ms: Date.now() - started });
   return { groups, unassigned };
 }
 
-function configFilePath(serverId, relPath) {
+/** Resolve a requested config path, or throw 404 unless it is a plain config file the scan would list. */
+async function existingConfig(serverId, relPath) {
+  const notFound = () => httpError(404, 'Config file not found.');
   const normalized = String(relPath || '').replace(/\\/g, '/');
-  if (!CONFIG_EXTENSIONS.has(path.posix.extname(normalized).toLowerCase())) return null;
-  if (!configRoots(serverId).some((root) => normalized.startsWith(`${root}/`))) return null;
-  const serverRoot = dataPath('servers', serverId);
-  return safeJoin(serverRoot, normalized);
+  if (!CONFIG_EXTENSIONS.has(path.posix.extname(normalized).toLowerCase())) throw notFound();
+  const segments = normalized.split('/');
+  if (segments.some((segment) => !segment || segment.startsWith('.'))) throw notFound();
+  const root = configRoots(serverId).find((candidate) => normalized.startsWith(`${candidate}/`));
+  if (!root) throw notFound();
+  const depth = segments.length - root.split('/').length - 1;
+  if (depth > MAX_SCAN_DEPTH) throw notFound();
+  const abs = safeJoin(dataPath('servers', serverId), normalized);
+  const stat = await fsp.lstat(abs).catch(() => null);
+  if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > MAX_CONFIG_BYTES) throw notFound();
+  return abs;
 }
 
-async function existingConfig(serverId, relPath) {
-  const normalized = String(relPath || '').replace(/\\/g, '/');
-  if (!discoveredFiles.get(serverId)?.has(normalized)) throw httpError(404, 'Config file not found.');
-  const abs = configFilePath(serverId, normalized);
-  if (!abs) throw httpError(404, 'Config file not found.');
-  const stat = await fsp.lstat(abs).catch(() => null);
-  if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > MAX_CONFIG_BYTES) {
-    throw httpError(404, 'Config file not found.');
-  }
-  return abs;
+/** Option descriptions for the single cached jar a config file belongs to, read from the database only. */
+function descriptionsFor(serverId, filePath) {
+  const cached = jarMeta.cachedForServer(serverId);
+  if (!cached.some((row) => row.descriptions)) return {};
+  const tokenIndex = buildTokenIndex(
+    cached.map((row) => ({
+      tokens: modTokens([row.meta?.modId, row.meta?.name, path.basename(row.rel, path.extname(row.rel))]),
+    }))
+  );
+  const match = singleMatch(filePath, tokenIndex);
+  return (match >= 0 && cached[match].descriptions) || {};
 }
 
 async function read(serverId, relPath) {
@@ -262,7 +229,7 @@ async function read(serverId, relPath) {
   return {
     path: normalized,
     content: content.toString('utf8'),
-    descriptions: discoveredFiles.get(serverId)?.get(normalized) || {},
+    descriptions: descriptionsFor(serverId, normalized),
   };
 }
 

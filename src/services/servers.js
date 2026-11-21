@@ -1216,6 +1216,7 @@ async function deleteServerImpl(
     // Samples are server data, not player analytics: they go even when stats are kept.
     db.run('DELETE FROM server_samples WHERE server_id = ?', id);
     db.run('DELETE FROM server_samples_hourly WHERE server_id = ?', id);
+    db.run('DELETE FROM mod_jar_meta WHERE server_id = ?', id);
     db.run('DELETE FROM deleted_server_viewers WHERE server_id = ?', id);
     db.run('DELETE FROM deleted_servers WHERE id = ?', id);
     if (keepPlayerStats) {
