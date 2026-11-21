@@ -17,6 +17,7 @@ import { confirmDialog } from '../lib/confirm.js';
 import { upgradeNotice } from '../lib/customizations.js';
 import { runTask } from '../lib/progress.js';
 import { withBusy } from '../lib/loading.js';
+import { offerRollback } from '../lib/packVersion.js';
 
 document.getElementById('updates-check-all')?.addEventListener('click', async () => {
   try {
@@ -135,28 +136,6 @@ async function upgradePack(row, { serverId, serverName, subject, current, latest
   } catch (err) {
     if (err.dismissed) return; // progress hidden - the task tray takes over
     toast(err.message || 'The upgrade could not be completed. Please try again.', { kind: 'error', timeout: 12000 });
-  }
-}
-
-async function offerRollback(serverId, serverName, errorMessage) {
-  const ok = await confirmDialog({
-    title: 'Upgrade failed. Roll back?',
-    message: errorMessage || 'The server did not come back healthy after the upgrade.',
-    detail: 'Rolling back restores the automatic pre-update backup and pins the previous pack version.',
-    confirmLabel: 'Roll Back',
-    danger: true,
-  });
-  if (!ok) return;
-  try {
-    const result = await runTask({
-      title: `Rolling back ${serverName}…`,
-      start: async () => (await postJSON(`/api/servers/${serverId}/pack/rollback`, {})).taskId,
-    });
-    toast(`Rolled back to ${result && result.version ? result.version : 'the previous version'}.`);
-    setTimeout(() => location.reload(), 900);
-  } catch (err) {
-    if (err.dismissed) return; // progress hidden - the task tray takes over
-    toast(err.message || 'The rollback could not be completed. Please try again.', { kind: 'error', timeout: 12000 });
   }
 }
 
