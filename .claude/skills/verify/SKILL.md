@@ -115,7 +115,7 @@ and after.
 Every visible change: before (`main`) and after, dark and light, desktop and phone width. Neutral
 server, world and player names; no real server names, addresses, domains, player names or tokens in
 a shot. They go in the PR body, from a `pr-shots` branch (`<pr>/<name>.png`, never merged) embedded
-from `raw.githubusercontent.com/anefzaoui/minecraft-server-manager/pr-shots/`. `docs/screenshots/`
+from `raw.githubusercontent.com/Mx772/minecraft-server-manager/pr-shots/`. `docs/screenshots/`
 and `docs/images/` change only when the docs do. A change with nothing to see shows its proof
 (output, log lines) instead and says so.
 

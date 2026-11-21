@@ -910,6 +910,8 @@ const UPGRADE_STEP_LABELS = {
   // GTNH, 20 for CurseForge/Modrinth, 10 otherwise - see upgrade.js).
   monitoring: 'Starting & monitoring the new version…',
   overlay: 'Re-applying custom overlay mods…',
+  profile: 'Applying recommended settings…',
+  'profile-restart': 'Restarting to apply recommended settings…',
 };
 
 // The version picker's list: every listable version of the server's pack,
