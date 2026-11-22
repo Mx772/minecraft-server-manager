@@ -5,9 +5,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/anefzaoui/minecraft-server-manager/releases/latest"><img src="https://img.shields.io/github/v/release/anefzaoui/minecraft-server-manager?logo=github" alt="GitHub release"></a>
-  <a href="https://github.com/anefzaoui/minecraft-server-manager/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/anefzaoui/minecraft-server-manager/ci.yml?logo=github&label=ci" alt="CI"></a>
-  <a href="https://github.com/anefzaoui/minecraft-server-manager/pkgs/container/minecraft-server-manager"><img src="https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" alt="GHCR image"></a>
+  <a href="https://github.com/Mx772/minecraft-server-manager/releases/latest"><img src="https://img.shields.io/github/v/release/Mx772/minecraft-server-manager?logo=github" alt="GitHub release"></a>
+  <a href="https://github.com/Mx772/minecraft-server-manager/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Mx772/minecraft-server-manager/ci.yml?logo=github&label=ci" alt="CI"></a>
+  <a href="https://github.com/Mx772/minecraft-server-manager/pkgs/container/minecraft-server-manager"><img src="https://img.shields.io/badge/ghcr.io-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" alt="GHCR image"></a>
   <img src="https://img.shields.io/github/stars/anefzaoui/minecraft-server-manager?logo=github" alt="GitHub stars">
   <img src="https://img.shields.io/badge/node-%E2%89%A524-339933?logo=nodedotjs&logoColor=white" alt="Node 24+">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/anefzaoui/minecraft-server-manager" alt="MIT license"></a>
@@ -112,13 +112,13 @@ by host path).
 
 A pre-built multi-arch image (amd64 + arm64) is published to GHCR on two channels:
 
-| Tag                            | Moves when                     | Use it for                                                |
-| ------------------------------ | ------------------------------ | --------------------------------------------------------- |
-| `:latest`                      | A release is tagged.           | Most installs.                                            |
-| `:v<version>`, e.g. `:v0.14.1` | Never (one per release).       | Pinning a release.                                        |
-| `:edge`                        | Every change merged to `main`. | Trying fixes before the next release. Expect rough edges. |
-| `:sha-<commit>`                | Never (one per merge).         | Pinning one exact `main` build.                           |
-| `:branch-<branch>`             | Every push to an open PR.      | Testing one unmerged change. Expect rough edges.          |
+| Tag                           | Moves when                     | Use it for                                                |
+| ----------------------------- | ------------------------------ | --------------------------------------------------------- |
+| `:latest`                     | A release is tagged.           | Most installs.                                            |
+| `:v<version>`, e.g. `:v1.0.0` | Never (one per release).       | Pinning a release.                                        |
+| `:edge`                       | Every change merged to `main`. | Trying fixes before the next release. Expect rough edges. |
+| `:sha-<commit>`               | Never (one per merge).         | Pinning one exact `main` build.                           |
+| `:branch-<branch>`            | Every push to an open PR.      | Testing one unmerged change. Expect rough edges.          |
 
 For example `ghcr.io/mx772/minecraft-server-manager:edge`. When a new image needs to update the
 panel's database, it saves a snapshot of the old one first, so you can move back to the previous
@@ -128,12 +128,12 @@ On a fresh Linux server, the installer does the whole thing: installs Docker if 
 `/opt/msm`, starts the panel, and waits until it answers.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/anefzaoui/minecraft-server-manager/main/deploy/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Mx772/minecraft-server-manager/main/deploy/install.sh | sudo bash
 ```
 
 Run it again any time to upgrade; it keeps your data, your `.env`, and any edits you made to the
 compose file. `--help` lists the rest: `--dir`, `--port`, `--bind 127.0.0.1` for a reverse-proxy
-setup, `--tag v0.14.1` to pin a version, and `--uninstall`.
+setup, `--tag v1.0.0` to pin a version, and `--uninstall`.
 
 Prefer to drive it yourself, or using Portainer/Dockge? Grab the
 [docker-compose.yml](docker-compose.yml) from the repo root, set **one** variable, and start:
@@ -187,7 +187,7 @@ host.docker.internal:host-gateway` (Docker Engine 20.10+) for the fallback path;
 ### 🖥️ Option 2: From source (any OS, incl. Windows/macOS)
 
 ```bash
-git clone https://github.com/anefzaoui/minecraft-server-manager.git minecraft-server-manager
+git clone https://github.com/Mx772/minecraft-server-manager.git minecraft-server-manager
 cd minecraft-server-manager
 pnpm install               # installs deps and builds the Tailwind CSS (postinstall)
 pnpm run build             # optional: also build the esbuild client-JS bundle (raw source is served otherwise)

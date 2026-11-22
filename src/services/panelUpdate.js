@@ -12,7 +12,7 @@ const db = require('../db');
 const githubApi = require('./githubApi');
 const installedVersion = require('../../package.json').version;
 
-const PANEL_REPO = 'anefzaoui/minecraft-server-manager';
+const PANEL_REPO = 'Mx772/minecraft-server-manager';
 // Mapped result row (the underlying github: row already carries ETag + TTL).
 const CACHE_KEY = 'panel-latest-release';
 const RELEASES_CACHE_KEY = `github:/repos/${PANEL_REPO}/releases?per_page=10`;
