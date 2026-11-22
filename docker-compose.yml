@@ -17,7 +17,7 @@
 # container-local ones.
 services:
   panel:
-    image: ghcr.io/anefzaoui/minecraft-server-manager:latest
+    image: ghcr.io/mx772/minecraft-server-manager:latest
     container_name: minecraft-server-manager
     restart: unless-stopped
     ports:

@@ -90,7 +90,7 @@ assert_file "$ROOT/docker-compose.yml" 'wrote docker-compose.yml'
 assert_file "$ROOT/.env" 'wrote .env'
 if [ -d "$ROOT/data" ]; then ok 'created the data directory'; else bad 'created the data directory'; fi
 assert_contains "DATA_DIR_HOST=$ROOT/data" "$(cat "$ROOT/.env")" '.env points at the data directory'
-assert_contains "ghcr.io/anefzaoui/minecraft-server-manager:latest" "$(cat "$ROOT/docker-compose.yml")" 'compose uses the published image'
+assert_contains "ghcr.io/mx772/minecraft-server-manager:latest" "$(cat "$ROOT/docker-compose.yml")" 'compose uses the published image'
 assert_contains "'0.0.0.0:25564:25564'" "$(cat "$ROOT/docker-compose.yml")" 'publishes the default port'
 assert_contains 'pull' "$(cat "$MOCK_DIR/calls.log")" 'pulled the image'
 assert_contains 'up -d' "$(cat "$MOCK_DIR/calls.log")" 'started the stack'

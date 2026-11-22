@@ -4,7 +4,7 @@
 # where we may install it). One code path: a provider-specific deployment should
 # call this rather than re-implementing it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/anefzaoui/minecraft-server-manager/main/deploy/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/Mx772/minecraft-server-manager/main/deploy/install.sh | sudo bash
 #
 # It is safe to run twice. A second run upgrades the panel to the newest image
 # and leaves your data, .env, and any edits to docker-compose.yml alone (the
@@ -25,7 +25,7 @@ DIR="${MSM_DIR:-/opt/msm}"
 PORT="${MSM_PORT:-25564}"
 BIND="${MSM_BIND:-0.0.0.0}"
 TAG="${MSM_TAG:-latest}"
-IMAGE="${MSM_IMAGE:-ghcr.io/anefzaoui/minecraft-server-manager}"
+IMAGE="${MSM_IMAGE:-ghcr.io/mx772/minecraft-server-manager}"
 CONTAINER_NAME='minecraft-server-manager'
 SKIP_DOCKER=0
 NO_START=0

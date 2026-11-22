@@ -7,21 +7,171 @@ its own dated entry.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-21
+
+The first release of this fork, and the start of its own version numbers: from here on, releases
+here no longer follow upstream's (anefzaoui/minecraft-server-manager). It contains everything in
+upstream 0.15.0 except the website, plus this fork's own features: a Discord chat bridge, pack
+profiles, customized pack files that survive pack updates, panel-wide analytics, multi-select on
+the Files pages, and a faster mod configs tab.
+
+Numbers marked "upstream" refer to issues and pull requests on anefzaoui/minecraft-server-manager;
+the others are this repository's.
+
+### Before you upgrade
+
+- **Back up the data folder first**, as before any upgrade. Migrations 029 to 041 apply on boot,
+  and there are no new environment variables. The compose file is unchanged.
+- **Moving from upstream's image:** point the compose file at
+  `ghcr.io/mx772/minecraft-server-manager:latest` (or `:v1.0.0`) and restart. Once it has run, the
+  database is ahead of upstream's: to go back to upstream's image, restore the backup.
+- **Image channels** (#1). `:latest` and `:v<version>` move only when a release is tagged. Every
+  change merged to `main` publishes `:edge` and `:sha-<commit>` for trying fixes early.
+- **Check a server whose world border or sliders changed by themselves** (upstream #113). The fix
+  stops the panel from writing values you didn't touch, but it can't tell which saved values were
+  yours. If **World border radius** shows a small number you never set (the world border sits right
+  at spawn), or the memory or CPU sliders hold values you didn't pick, open the server's
+  **Configuration** tab, empty or correct those fields, save, and restart the server.
+- **A few behaviours changed on purpose:**
+  - Pack mods you disabled stay disabled when the same pack is updated or changes version. They
+    used to come back with the update.
+  - A Minecraft version update clears a Forge or NeoForge build number pinned for the old version
+    (that build doesn't exist for the new one). A keyword pin such as `latest` is kept.
+  - A crash restart, a scheduled backup or start, and a pack update or rollback that find their
+    server busy now wait and retry for up to 30 minutes instead of failing.
+  - The port check and suggestion API (`GET /api/ports/check`, `GET /api/ports/suggest`) answers
+    admins and operators only.
+  - `POST /api/servers/:id/backups/retention`: `null` or `""` for a key now removes it, so the
+    server follows the panel-wide value.
+
+### Added
+
+- **Discord chat bridge** (#8, #12). A server's **Discord** tab checks that Discord & Chat Images
+  has a build for the server's loader and Minecraft version, installs it with its required mods
+  (pack updates keep them), writes its config and checks the bot token, intents, guild and channel
+  with Discord before saving. The token is stored encrypted and never shown again; the tab builds
+  the bot's invite link with the exact permissions it needs. **Remove** takes out the mod, its
+  config and the token.
+- **Pack profiles** (#7, #14). When a server runs a pack the panel has a profile for (ATM10, for
+  example), the **Pack Setup** tab offers its recommended settings: config file changes and a few
+  server settings. Nothing changes until you turn a suggestion on. Each change is checked before it
+  is written, a change that no longer fits the pack's files after an update is held for review
+  instead of applied, and every file it touches is backed up first.
+- **Customized pack files survive pack updates** (#3, #11). **Add To Customizations** on the Files
+  tab keeps your copy of a pack file, which is put back after every pack update. The Mods tab lists
+  each customized file and whether it is applied, and when the file on the server changed since
+  you captured it, **Keep Current** or **Restore My Copy** settles it.
+- **Panel-wide analytics** (#17, #18). An **Analytics** page with Overview, Servers and Players
+  views across every server you can see: play time, sessions, an hourly activity heatmap, per-player
+  gameplay stats, and TPS, player and memory charts, filtered by server and time range. Deleting a
+  server can **Keep Player Stats**, so its players' history stays in analytics.
+- **Multi-select on the Files pages** (#3, #9). Tick files (Shift+click for a range, or **Select
+  All**) to delete, move, copy or download them as one zip. A partial failure says which items
+  failed, and failed deletes stay selected.
+- **Mark All Read for crash reports** (#16), on the History tab's crash card.
+- **Change a server's game port after it was created** (upstream #67, #68). The **Game Port** card
+  on a server's **Configuration** tab (and **Change** next to the port on the Overview) takes a port,
+  with a live free or in-use check, or picks one with **Use Next Free Port**. RCON moves with it.
+  The change applies right away: a running server asks first and restarts on the new port, a
+  stopped one uses it from its next start. If the server can't start on the new port, it comes back
+  up on its old one, and the card and its history say why. A port counts as taken when any Docker
+  container on the host publishes it, not only the panel's own servers.
+- **Backup retention in the panel** (upstream #64, #68). **Settings → Backup Retention** sets how
+  many scheduled, manual, pre-update and safety backups each server keeps, with optional age and
+  size limits, and a server's Backups tab can set any of them differently under **Retention for
+  This Server**. Saving never deletes anything by itself: when the new limits would leave backups
+  over, a dialog lists exactly what would go, per server, and you choose **Remove Now** or **From
+  Next Backup**.
+- **Pick or downgrade a modpack version** (upstream #69, #70). **Change Version…** on the Overview's
+  pack card, or **Switch to This Version** in a pack's details on the Modpacks page, moves an
+  installed CurseForge, Modrinth or GTNH pack to any listed version, newer or older, under every
+  update policy. It goes through the usual pre-update backup, rebuild and one-click rollback. A
+  version for a newer Minecraft asks first, since the world is converted for good, and one for an
+  older Minecraft than the world's is refused. A server with no recorded pin gets **Pick a
+  Version…** on its Settings warning.
+- **Change the mod loader build** (upstream #59). A **Loader Version** card on **Mods → Versions**
+  shows the Forge, NeoForge, Fabric or Quilt build the server runs and switches it to any build
+  published for its Minecraft version, or back to the default. On a Forge or Fabric CurseForge pack
+  it overrides the loader the pack declares, for a mod that needs a newer one. A build that doesn't
+  exist is refused before anything happens, naming the closest one, and the change takes a backup
+  before the server is rebuilt.
+- **Edit mod configs** (upstream #92, #95). A **Configs** tab under Mods (or **Config Files** on the
+  Mods tab) groups a server's config files by the mod they belong to and opens each in an editor
+  that understands its format, with a raw mode for anything else. It needs the **Files**
+  permission. In this fork the tab reads only the parts of each mod jar it needs and remembers them
+  between visits and restarts, so a large pack lists in about a second the first time and well
+  under one after (#21).
+- **Console autocomplete** (upstream #93, #94). The command box suggests vanilla Minecraft commands
+  for the server's version as you type, with their syntax and a short description, and online
+  player names and selectors for player arguments. **Tab** completes, the arrow keys browse. Mod and
+  plugin commands aren't in the list.
+- **A Health page, a task tray and Docker networks created on demand** (upstream #71 to #89, via
+  #2). A server set to a Docker network that doesn't exist yet gets a bridge network made for it.
+- **Initial heap** and **Stop the Server When Over Quota** on the Resources card of Settings →
+  Configuration (upstream #68). The create wizard's Advanced mode offers Initial heap too, and a
+  starting heap larger than the heap is refused, since Java wouldn't start.
+- **Two new alerts** for Discord and the status summary (upstream #68): a port change that couldn't
+  put the server back, and a crash restart that gave up.
+
 ### Fixed
 
-- **Saving a server's settings changes only what you changed** (#113). The Configuration tab
-  reloads after every save, and the browser put the values it remembered back into the fields by
-  their place on the page. That place moves whenever the header's buttons change (Start becomes
-  Stop and Restart, Apply Changes appears), so a value could land in another setting: the CPU
-  count in a memory slider, the CPU slider at its maximum, or the view distance in **World border
-  radius**, which then went into `server.properties` as `max-world-size` and put the world border
-  right at spawn. Every field now starts from what the server has, and a save sends only the
-  fields you edited: a slider you didn't move, a list showing its default, or a value above a
-  slider's usual range is no longer written back. Thanks @Emperor-Koala for the report.
-- **Emptying a setting puts it back to the server's default** (#113). The server image writes a
-  property while its setting is set but never takes one out, so a field emptied back to "Default"
-  left its last value in `server.properties`. Saving now removes that line, and the server uses its
-  default from its next start.
+- **Saving a server's settings changes only what you changed** (upstream #113, #22). The
+  Configuration tab reloads after every save, and the browser put the values it remembered back
+  into the fields by their place on the page, so a value could land in another setting: the CPU
+  count in a memory slider, or the view distance in **World border radius**, which put the world
+  border right at spawn. Every field now starts from what the server has, and a save sends only the
+  fields you edited.
+- **Emptying a setting puts it back to the server's default** (upstream #113, #22). Saving now
+  removes its line from `server.properties`, and the server uses its default from its next start.
+- **A crash report whose file was removed** (#16) opens with a clear message instead of a server
+  error, and still clears its "new" badge.
+- **Crashes after a stop request are caught again** (#2). A stop request in the last 10 minutes
+  hid a later real crash (being stopped for running out of memory, for example) after the server
+  had started again, so it was neither recorded nor restarted.
+- **Restoring and installing worlds** (upstream #72, #2). A failure part way leaves the old world in
+  place instead of a half-written one, a replace-install no longer leaves the old Nether and End
+  beside a new overworld, and an interrupted restore across disks can no longer lose the only
+  complete copy of the world.
+- **Restoring an old backup could delete that same backup** (upstream #68). A backup being restored
+  is never pruned now, and deleting it by hand is refused until the restore is done.
+- **Skipping unchanged scheduled backups works after the first one** (#2).
+- **Update badges** (#2) refresh after mods are added or removed, settings change, a container is
+  rebuilt or a blueprint is installed.
+- **The Docker network suggestions** in the wizard and Settings list existing networks again (#2).
+- **The pack version change progress** names its profile steps instead of showing their internal
+  names (#21).
+- **The one-line installer works** (upstream #105) when piped into `bash`, as the README says.
+- **Disabled pack mods stay disabled across a pack update** (upstream #70).
+- **An unpinned Modrinth server is pinned to its installed version at boot** (upstream #70).
+- **Loader builds** (upstream #59). Forge lists every published build, NeoForge servers on the
+  year-based Minecraft versions (26.x) are offered their own builds, snapshot builds are left out
+  for release servers, and a loader build update on the Updates page takes a pre-update backup
+  first.
+- **Busy servers** (upstream #68). Starting a server that is already running now does nothing.
+  Servers shown as unhealthy or stalled get Restart and Stop in their header instead of Start.
+- **Panel text that pointed at missing controls** (upstream #68). Operators and viewers no longer
+  see links to pages their role can't open, and Restore no longer promises to start the server
+  again: a restored server stays stopped.
+- **The mod quota is checked before a download or upload lands** (upstream #72), not after the bytes
+  are on disk.
+
+### Security
+
+- **Hardening of the panel's outbound requests** (upstream #71): addresses are checked once and
+  pinned, so a name can't be pointed at an internal address between the check and the request.
+  Updating is recommended.
+- **The Discord bot token** (#12) is stored encrypted, masked in the Docker spec preview, and kept
+  out of the Files tab and backups on servers that use the bridge.
+
+### Internal
+
+- History summaries always end in punctuation, enforced by a lint rule (upstream #60).
+- Tests no longer depend on luck or on the machine: no fixed waits on a slow runner, no OS port
+  luck, no real data folder, and no live Docker daemon (upstream #60, #99, #101).
+- Verification is written down: a verify skill and a [REVIEW.md](https://github.com/Mx772/minecraft-server-manager/blob/main/REVIEW.md) checklist (upstream
+  #98), an [AI declaration](https://github.com/Mx772/minecraft-server-manager/blob/main/AI-DECLARATION.md) (upstream #96), and a [roadmap](https://github.com/Mx772/minecraft-server-manager/blob/main/ROADMAP.md), a code
+  of conduct and a pull request template (upstream #104).
+- Jar metadata is cached in the database (migration 041), so other features can reuse it (#21).
 
 ## [0.14.1] - 2026-09-21
 
