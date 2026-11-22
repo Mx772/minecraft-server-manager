@@ -52,7 +52,7 @@ test('CurseForge: latest prefers the newest release over a newer beta, and repor
   assert.equal(r.mcVersion, '1.21.1');
   assert.equal(r.projectId, '555');
   assert.equal(r.allVersions.length, 3);
-  assert.deepEqual(r.allVersions[1], { id: '2', name: 'v2', type: 'release', date: 'd' });
+  assert.deepEqual(r.allVersions[1], { id: '2', name: 'v2', type: 'release', date: 'd', mcVersion: '1.21.1' });
 });
 
 test('CurseForge: an explicit file wins, and no files at all is a 404', async () => {

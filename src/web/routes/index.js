@@ -50,6 +50,7 @@ const SERVER_TABS = [
   'analytics',
   'mods',
   'pack-setup',
+  'configs',
   'updates',
   'map',
   'files',
@@ -74,7 +75,7 @@ const TAB_GROUPS = [
   { key: 'overview', label: 'Overview', icon: 'layout-dashboard', tabs: ['overview'] },
   { key: 'console', label: 'Console', icon: 'terminal', tabs: ['console', 'chat', 'commands'] },
   { key: 'players', label: 'Players', icon: 'users', tabs: ['players', 'inventory', 'analytics'] },
-  { key: 'mods', label: 'Mods', icon: 'puzzle', tabs: ['mods', 'pack-setup', 'updates'] },
+  { key: 'mods', label: 'Mods', icon: 'puzzle', tabs: ['mods', 'pack-setup', 'configs', 'updates'] },
   { key: 'world', label: 'World', icon: 'earth', tabs: ['worlds', 'map', 'files'] },
   { key: 'backups', label: 'Backups', icon: 'archive', tabs: ['backups'] },
   { key: 'monitoring', label: 'Monitoring', icon: 'activity', tabs: ['history', 'metrics'] },
@@ -95,6 +96,7 @@ const SUB_LABELS = {
   worlds: 'Worlds',
   mods: 'Mods',
   'pack-setup': 'Pack Setup',
+  configs: 'Configs',
   updates: 'Versions',
   map: 'Map',
   files: 'Files',
@@ -111,7 +113,7 @@ const ADMIN_ONLY_TABS = new Set(['chatbot']);
 
 /** Build the two-level nav (top groups + contextual sub-nav) for a given active tab. */
 // Sub-nav entries that need a per-server capability beyond `view`.
-const CAP_TABS = { files: 'files' };
+const CAP_TABS = { files: 'files', configs: 'files' };
 // Sub-nav entries that only make sense for some servers. Version compatibility
 // is answerable for mod loaders only (see services/compat.js appliesTo).
 // Pack Setup (recommended settings + customizations) exists for modpack servers only.
@@ -575,6 +577,9 @@ router.get(
       context.compatUncheckedMore = Math.max(0, unchecked.length - LIST_CAP);
       context.compatUncheckedTotal = unchecked.length;
       context.modCount = compat.modCount(row.id);
+      // The loader card: which build runs and who decides it. The build list
+      // itself is fetched by the page, so a slow registry never delays it.
+      context.loaderPin = require('../../services/loaderPin').loaderVersionInfo(row);
     } else if (tab === 'worlds') {
       const worldsService = require('../../services/worlds');
       context.worlds = await worldsService.listServerWorlds(row.id).catch(() => []);
@@ -623,6 +628,21 @@ router.get(
           context.filePath = '';
           context.crumbs = [];
           context.parentPath = '';
+        }
+      }
+    } else if (tab === 'configs') {
+      // Configs share the Files capability, but the UI is organized by mods
+      // rather than exposing a general-purpose directory browser.
+      context.configsAccess = Boolean(perms.files);
+      if (perms.files) {
+        try {
+          const listing = await require('../../services/modConfigs').list(row.id);
+          context.configGroups = listing.groups;
+          context.unassignedConfigs = listing.unassigned;
+        } catch (err) {
+          pageDegraded('server-mod-configs-tab', err);
+          context.configGroups = [];
+          context.unassignedConfigs = [];
         }
       }
     } else if (tab === 'map') {

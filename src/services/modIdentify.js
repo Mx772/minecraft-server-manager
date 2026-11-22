@@ -32,16 +32,27 @@ const META_ENTRIES = new Set([
   'META-INF/MANIFEST.MF',
 ]);
 
-/** Read the known metadata entries out of a jar buffer. */
-function readJarMetaEntries(buffer) {
+const MAX_META_ENTRY_BYTES = 1024 * 1024;
+const MAX_EXTRA_ENTRY_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Walk an opened zip's central directory and read only the wanted entries
+ * (META_ENTRIES plus any `extra` names). Resolves to a Map of name -> text.
+ * `open` is a yauzl opener: (opts, cb) => yauzl.fromBuffer/open(...).
+ */
+function readJarMetaEntries(open, extra = []) {
+  const extraSet = new Set(extra);
   return new Promise((resolve) => {
-    yauzl.fromBuffer(buffer, { lazyEntries: true }, (err, zip) => {
+    open({ lazyEntries: true, autoClose: true }, (err, zip) => {
       if (err) return resolve(new Map()); // not a readable zip — metadata layer just yields nothing
       const texts = new Map();
       zip.on('error', () => resolve(texts));
       zip.on('end', () => resolve(texts));
       zip.on('entry', (entry) => {
-        if (!META_ENTRIES.has(entry.fileName) || entry.uncompressedSize > 1024 * 1024) return zip.readEntry();
+        const isMeta = META_ENTRIES.has(entry.fileName);
+        const isExtra = extraSet.has(entry.fileName);
+        const cap = isMeta ? MAX_META_ENTRY_BYTES : MAX_EXTRA_ENTRY_BYTES;
+        if ((!isMeta && !isExtra) || entry.uncompressedSize > cap) return zip.readEntry();
         zip.openReadStream(entry, (streamErr, readStream) => {
           if (streamErr) return zip.readEntry();
           const chunks = [];
@@ -74,9 +85,9 @@ function manifestVersion(manifestText) {
  * else { loader, kind, modId, name, version, mcConstraint }.
  * mcConstraint is the raw dependency string (often a range) — informative,
  * not a verdict-grade version list.
+ * @param {Map<string, string>} texts entry name -> text from readJarMetaEntries
  */
-async function parseJarMeta(buffer) {
-  const texts = await readJarMetaEntries(buffer);
+function parseMetaTexts(texts) {
   if (!texts.size) return null;
 
   const fabric = texts.get('fabric.mod.json');
@@ -152,6 +163,32 @@ async function parseJarMeta(buffer) {
     }
   }
   return null;
+}
+
+/** Parse jar metadata from an in-memory jar buffer. */
+async function parseJarMeta(buffer) {
+  const texts = await readJarMetaEntries((opts, cb) => yauzl.fromBuffer(buffer, opts, cb));
+  return parseMetaTexts(texts);
+}
+
+/**
+ * Read a jar from disk without loading it: only the central directory and the
+ * wanted entries are read. Returns the parsed metadata plus the text of each
+ * requested `extraEntries` name that exists (same pass, one open per jar).
+ * @param {string} absPath
+ * @param {string[]} [extraEntries]
+ * @returns {Promise<{meta: any, extras: Map<string, string>}>}
+ */
+async function inspectJarFile(absPath, extraEntries = []) {
+  const texts = await readJarMetaEntries((opts, cb) => yauzl.open(absPath, opts, cb), extraEntries);
+  const extras = new Map();
+  for (const name of extraEntries) if (texts.has(name)) extras.set(name, texts.get(name));
+  return { meta: parseMetaTexts(texts), extras };
+}
+
+/** Same result as parseJarMeta(buffer), reading from a file path. */
+async function parseJarMetaFile(absPath) {
+  return (await inspectJarFile(absPath)).meta;
 }
 
 // ---- Platform data normalization -------------------------------------------
@@ -310,4 +347,12 @@ function verdictFor(identity, { kind, loader, mc }) {
   return { status: 'ok', loaderOk, mcOk };
 }
 
-module.exports = { identifyJars, verdictFor, parseJarMeta, splitCfGameVersions, PLUGIN_LOADERS };
+module.exports = {
+  identifyJars,
+  verdictFor,
+  parseJarMeta,
+  parseJarMetaFile,
+  inspectJarFile,
+  splitCfGameVersions,
+  PLUGIN_LOADERS,
+};

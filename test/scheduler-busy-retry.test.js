@@ -15,6 +15,11 @@ const backups = require('../src/services/backups');
 const servers = require('../src/services/servers');
 const httpError = require('../src/utils/httpError');
 const { runTaskWithRetry } = require('../src/services/scheduler');
+// Cases that end by themselves (a success, a stop, a schedule turned off) get a
+// budget they can never run out of: a short wall-clock budget made them give up
+// early whenever a slow runner took longer than it over the first try. Only the
+// cases about giving up keep a small one, and those can't pass by luck.
+const NO_GIVE_UP_MS = 60_000;
 
 // The redundant-backup check inspects the container; keep it off the real Docker
 // daemon (when one exists, its latency eats the short retry budgets below).
@@ -42,8 +47,7 @@ test('a backup refused because the server is busy retries, then runs', async (t)
     return { id: 'bk_test' };
   });
   t.mock.method(backups, 'verifyBackup', async () => {}); // a scheduled backup is read back after it is written
-  // A generous budget: the first run also pays for lazily loaded modules.
-  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 2000 });
+  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: NO_GIVE_UP_MS });
   assert.equal(calls, 3);
 });
 
@@ -52,7 +56,7 @@ test('a server that stays busy fails once the wait runs out', async (t) => {
   const spy = t.mock.method(backups, 'createBackup', async () => {
     throw busy();
   });
-  await assert.rejects(runTaskWithRetry(job, { retryMs: 5, maxWaitMs: 40 }), /already in progress/);
+  await assert.rejects(runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 500 }), /already in progress/);
   assert.ok(spy.mock.callCount() > 1, `${spy.mock.callCount()} tries`); // retried, then gave up
 });
 
@@ -63,7 +67,7 @@ test('a scheduled start that finds the server busy retries too (a start is safe 
     calls++;
     if (calls < 2) throw busyErr('Cannot start: a backup cleanup operation is already in progress for this server');
   });
-  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 50 });
+  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: NO_GIVE_UP_MS });
   assert.equal(calls, 2);
 });
 
@@ -82,7 +86,7 @@ test('a schedule turned off while waiting stops retrying', async (t) => {
     db.run("UPDATE schedules SET enabled = 0 WHERE id = 'sch_test'"); // someone disables it meanwhile
     throw busy();
   });
-  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 50 });
+  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: NO_GIVE_UP_MS });
   assert.equal(spy.mock.callCount(), 1);
 });
 
@@ -108,10 +112,10 @@ test('a schedule whose last run is still waiting to retry skips its next firing'
       throw busy(); // the first firing now waits to retry
     }
   });
-  const first = fireJob(job, { retryMs: 30, maxWaitMs: 500 });
+  const first = fireJob(job, { retryMs: 30, maxWaitMs: NO_GIVE_UP_MS });
   await waiting;
   await new Promise((r) => setImmediate(r));
-  await fireJob(job, { retryMs: 30, maxWaitMs: 500 }); // fired again (or re-armed) while the first waits
+  await fireJob(job, { retryMs: 30, maxWaitMs: NO_GIVE_UP_MS }); // fired again (or re-armed) while the first waits
   assert.equal(calls, 1, 'the second firing did not run');
   await first;
 });
@@ -131,12 +135,12 @@ test("another run finishing does not clear a waiting run's flag", async (t) => {
     return { id: 'bk_test' };
   });
   t.mock.method(backups, 'verifyBackup', async () => {});
-  const b = fireJob(job, { retryMs: 60, maxWaitMs: 600 });
+  const b = fireJob(job, { retryMs: 60, maxWaitMs: NO_GIVE_UP_MS });
   await waiting;
   await new Promise((r) => setImmediate(r));
-  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 50 }); // run A (e.g. an old re-armed loop) finishes
+  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: NO_GIVE_UP_MS }); // run A (e.g. an old re-armed loop) finishes
   const before = calls;
-  await fireJob(job, { retryMs: 60, maxWaitMs: 600 }); // B still waits: this firing must skip
+  await fireJob(job, { retryMs: 60, maxWaitMs: NO_GIVE_UP_MS }); // B still waits: this firing must skip
   assert.equal(calls, before, 'skipped');
   await b;
 });
@@ -161,7 +165,7 @@ test('a scheduled start that waited is dropped if someone stopped the server mea
     });
     throw busyErr('Cannot start: a backup operation is already in progress for this server');
   });
-  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 50 });
+  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: NO_GIVE_UP_MS });
   assert.equal(calls, 1, 'not retried after the Stop');
 });
 
@@ -189,6 +193,6 @@ test('a Stop pressed just before a scheduled start fires still counts', async (t
     });
     throw busyErr('Cannot start: a stop operation is already in progress for this server');
   });
-  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: 50 });
+  await runTaskWithRetry(job, { retryMs: 1, maxWaitMs: NO_GIVE_UP_MS });
   assert.equal(calls, 1, 'not started again after the Stop');
 });
