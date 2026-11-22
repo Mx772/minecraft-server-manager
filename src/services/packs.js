@@ -448,7 +448,7 @@ function baselineMcVersion(server) {
  */
 async function listPackVersions(serverId) {
   const server = serversService.getServer(serverId);
-  if (!server) throw httpError(404, 'Server not found');
+  if (!server) throw httpError(404, 'Server not found.');
   const pack = packIdentity(serverId);
   if (!pack) throw httpError(400, 'This server has no modpack to change.');
   if (pack.platform === 'ftb') throw httpError(400, 'FTB pack versions cannot be listed yet.');

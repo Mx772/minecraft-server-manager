@@ -202,7 +202,7 @@ async function assertChangeable(server, version) {
  */
 async function applyLoaderVersion(serverId, version, { actor, task }) {
   const server = servers.getServer(serverId);
-  if (!server) throw httpError(404, 'Server not found');
+  if (!server) throw httpError(404, 'Server not found.');
   const info = await assertChangeable(server, version);
   const envKey = /** @type {string} */ (info.envKey);
   const from = info.pinned || info.installed || '';
@@ -222,7 +222,7 @@ async function applyLoaderVersion(serverId, version, { actor, task }) {
   task.step(`Switching to ${target}…`);
   // Re-read: a settings save made while the backup ran must survive the pin.
   const current = servers.getServer(serverId);
-  if (!current) throw httpError(404, 'Server not found');
+  if (!current) throw httpError(404, 'Server not found.');
   const env = { ...current.env };
   if (version) env[envKey] = version;
   else delete env[envKey];

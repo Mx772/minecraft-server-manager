@@ -1547,7 +1547,7 @@ router.post(
     if (dryRun) return res.json({ ok: true });
     const actor = req.user.username;
     const taskId = tasks.run(
-      `Changing the ${info.loaderName} version on ${server.display_name}`,
+      `Changing the ${info.loaderName} version on ${server.display_name}…`,
       { serverId: server.id, actor },
       (t) => loaderPin.applyLoaderVersion(server.id, version, { actor, task: t })
     );

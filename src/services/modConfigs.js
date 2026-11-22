@@ -31,7 +31,7 @@ const JAR_FOLDERS = ['mods', 'plugins'];
 
 function configRoots(serverId) {
   const server = require('./servers').getServer(serverId);
-  if (!server) throw httpError(404, 'Server not found');
+  if (!server) throw httpError(404, 'Server not found.');
   const level = String(server.env?.LEVEL || 'world');
   const safeLevel = /^[A-Za-z0-9 _.-]{1,64}$/.test(level) ? level : 'world';
   return ['config', 'defaultconfigs', `${safeLevel}/serverconfig`];
