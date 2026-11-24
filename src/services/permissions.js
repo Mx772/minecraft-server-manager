@@ -202,6 +202,7 @@ const CAPABILITY_INFO = {
       'GET /api/servers/:id/events/export',
       'WRITES /api/servers/:id/crashes/*',
       'POST /api/blueprints/export (this server as source)',
+      'POST /api/automations (copy-files, delete-files)',
     ],
   },
   settings: {
@@ -231,6 +232,7 @@ const CAPABILITY_INFO = {
       'POST /api/servers/:id/map/disable',
       'WRITES /api/servers/:id/integrations/*',
       'WRITES /api/servers/:id/profile/*',
+      'POST /api/automations (discord)',
     ],
   },
   delete: {

@@ -71,6 +71,7 @@ async function main() {
     'console',
     'chat',
     'commands',
+    'automation',
     'players',
     'inventory',
     'analytics',

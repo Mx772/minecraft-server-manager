@@ -267,6 +267,7 @@ test('every route that names its server in the body is either under /servers/:id
       // A write outside /servers/:id that reads a server id from the body.
       const full = {
         'api.js': '/api',
+        'automations.js': '/api/automations',
         'worlds.js': '/api/worlds',
         'blueprints.js': '/api/blueprints',
         'inventory.js': '/api/inventory',

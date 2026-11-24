@@ -57,6 +57,18 @@ function up(db) {
       steps_json    TEXT NOT NULL DEFAULT '[]'
     );
     CREATE INDEX idx_automation_runs_automation ON automation_runs(automation_id, id DESC);
+
+    -- Saved starting points: an automation without its servers. Built-in ones are
+    -- code, never rows here.
+    CREATE TABLE automation_templates (
+      id              TEXT PRIMARY KEY,
+      name            TEXT NOT NULL,
+      description     TEXT NOT NULL DEFAULT '',
+      definition_json TEXT NOT NULL,
+      created_by      TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   for (const s of db.all('SELECT * FROM schedules')) {

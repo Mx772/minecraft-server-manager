@@ -10,6 +10,7 @@ const httpError = require('../utils/httpError');
 const db = require('../db');
 const { getTimezone } = require('../services/settings');
 const { ACTIONS } = require('./actions');
+const { EVENTS, EVENT_NAMES, MAX_EVENT_OFFSET_SEC } = require('./events');
 
 const MAX_OFFSET_SEC = 24 * 60 * 60;
 const GAP_SAMPLES = 50;
@@ -20,16 +21,31 @@ const targetsSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('panel') }),
 ]);
 
-const triggerSchema = z.object({
+const scheduleTriggerSchema = z.object({
   type: z.literal('schedule'),
   cron: z.string().trim().min(5).max(60),
 });
+
+const eventTriggerSchema = z.object({
+  type: z.literal('event'),
+  event: z.enum(EVENT_NAMES),
+});
+
+const triggerSchema = z.discriminatedUnion('type', [scheduleTriggerSchema, eventTriggerSchema]);
+
+// Checked right before a step runs; a step whose condition is not met is skipped.
+const conditionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('server-running') }),
+  z.object({ type: z.literal('players-online'), min: z.number().int().min(1).max(500).default(1) }),
+  z.object({ type: z.literal('no-players') }),
+]);
 
 const stepSchema = z.object({
   offsetSec: z.number().int().min(-MAX_OFFSET_SEC).max(MAX_OFFSET_SEC),
   action: z.string().min(1).max(40),
   params: z.record(z.string(), z.any()).default({}),
   onFailure: z.enum(['stop', 'continue']).default('stop'),
+  condition: conditionSchema.optional(),
 });
 
 const automationSchema = z.object({
@@ -40,14 +56,27 @@ const automationSchema = z.object({
   steps: z.array(stepSchema).min(1).max(20),
 });
 
+// A template is an automation without its servers: the kind of target stands in
+// for the target itself.
+const templateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  description: z.string().trim().max(300).default(''),
+  targetsKind: z.enum(['servers', 'all', 'panel']),
+  trigger: triggerSchema,
+  steps: z.array(stepSchema).min(1).max(20),
+});
+
 /**
  * @typedef {z.infer<typeof automationSchema>} AutomationDef
+ * @typedef {z.infer<typeof templateSchema>} TemplateDef
  */
 
 const FIELD_MESSAGES = {
-  name: 'Give the automation a name of 1 to 80 characters.',
+  name: 'Give it a name of 1 to 80 characters.',
   targets: 'Pick at least one server, all servers, or the panel itself to run on.',
-  trigger: 'The schedule needs a cron expression such as "0 4 * * *".',
+  targetsKind: 'Pick servers, all servers, or the panel itself for the template to run on.',
+  description: 'Keep the description to 300 characters or fewer.',
+  trigger: 'The trigger needs a cron schedule such as "0 4 * * *", or one of the known events.',
   steps: 'An automation needs 1 to 20 steps, each with an action and a time offset within 24 hours.',
 };
 
@@ -99,19 +128,22 @@ function describeGap(ms) {
 }
 
 /**
- * @param {unknown} def
- * @returns {AutomationDef}
+ * The checks an automation and a template share: the trigger, each step's
+ * action, parameters and condition, step order, and (for schedules) the lead time.
+ * @param {{ kind: 'servers' | 'all' | 'panel', trigger: AutomationDef['trigger'], steps: AutomationDef['steps'] }} def
+ * @returns {AutomationDef['steps']} the steps with parameters parsed and defaulted
  */
-function validateAutomation(def) {
-  const parsed = automationSchema.safeParse(def);
-  if (!parsed.success) throw shapeError(parsed.error);
-  const value = parsed.data;
+function validateSteps({ kind, trigger, steps: rawSteps }) {
   const timezone = getTimezone();
+  const eventName = trigger.type === 'event' ? trigger.event : null;
+  const event = eventName ? EVENTS[eventName] : null;
+  if (trigger.type === 'schedule') assertValidCron(trigger.cron, timezone);
+  else if (kind === 'panel') {
+    throw httpError(400, 'An event runs for a server, so pick at least one server or all servers.');
+  }
 
-  assertValidCron(value.trigger.cron, timezone);
-
-  const panel = value.targets.kind === 'panel';
-  const steps = value.steps.map((step, i) => {
+  const panel = kind === 'panel';
+  const steps = rawSteps.map((step, i) => {
     const action = ACTIONS[step.action];
     if (!action) throw httpError(400, `Step ${i + 1} uses an action the panel does not know.`);
     if (panel && action.scope !== 'panel') {
@@ -120,16 +152,73 @@ function validateAutomation(def) {
     if (!panel && action.scope === 'panel') {
       throw httpError(400, `${action.label} acts on the whole panel, so it cannot run for specific servers.`);
     }
+    if (event && !(action.events || []).includes(/** @type {string} */ (eventName))) {
+      // Catalog labels are sentence case; the refusal names the action the way the editor's menu does.
+      const name = action.label.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+      const lifecycle = !action.events || !action.events.length;
+      throw httpError(
+        400,
+        lifecycle
+          ? `${name} can't run ${event.when}, because it could trigger the same event again.`
+          : `${name} can't run ${event.when}, because ${event.reason}.`
+      );
+    }
+    if (step.condition && (panel || action.scope !== 'server')) {
+      throw httpError(
+        400,
+        `Step ${i + 1} (${action.label}) cannot have a condition, since it does not act on a server.`
+      );
+    }
     const params = action.params.safeParse(step.params);
-    if (!params.success) throw httpError(400, `The settings for step ${i + 1} (${action.label}) are not valid.`);
+    if (!params.success) {
+      // A parameter rule with its own sentence (a path that leaves the folder) says what is wrong.
+      const custom = params.error.issues.find((issue) => issue.code === 'custom');
+      throw httpError(
+        400,
+        `The settings for step ${i + 1} (${action.label}) are not valid.${custom ? ` ${custom.message}` : ''}`
+      );
+    }
     return { ...step, params: params.data };
   });
+
+  if (event) {
+    if (steps.some((s) => s.offsetSec < 0 || s.offsetSec > MAX_EVENT_OFFSET_SEC)) {
+      throw httpError(400, 'A step on an event can wait up to 1 hour after it, and cannot run before it.');
+    }
+    if (event.zeroOffsetOnly && steps.some((s) => s.offsetSec !== 0)) {
+      throw httpError(400, `Steps ${event.when} must run right away, with no delay.`);
+    }
+  }
 
   for (let i = 1; i < steps.length; i++) {
     if (steps[i].offsetSec < steps[i - 1].offsetSec) {
       throw httpError(400, 'Put the steps in time order, earliest first.');
     }
   }
+
+  const lead = leadMs(steps);
+  if (trigger.type === 'schedule' && lead > 0) {
+    const gap = cronMinGapMs(trigger.cron, { timezone });
+    if (lead >= gap) {
+      throw httpError(
+        400,
+        `The first step starts ${describeGap(lead)} ahead, but the schedule runs as often as every ${describeGap(gap)}. Shorten the lead time or run it less often.`
+      );
+    }
+  }
+  return steps;
+}
+
+/**
+ * @param {unknown} def
+ * @returns {AutomationDef}
+ */
+function validateAutomation(def) {
+  const parsed = automationSchema.safeParse(def);
+  if (!parsed.success) throw shapeError(parsed.error);
+  const value = parsed.data;
+
+  const steps = validateSteps({ kind: value.targets.kind, trigger: value.trigger, steps: value.steps });
 
   let targets = value.targets;
   if (targets.kind === 'servers') {
@@ -142,23 +231,30 @@ function validateAutomation(def) {
     targets = { kind: 'servers', serverIds: ids };
   }
 
-  const lead = leadMs(steps);
-  if (lead > 0) {
-    const gap = cronMinGapMs(value.trigger.cron, { timezone });
-    if (lead >= gap) {
-      throw httpError(
-        400,
-        `The first step starts ${describeGap(lead)} ahead, but the schedule runs as often as every ${describeGap(gap)}. Shorten the lead time or run it less often.`
-      );
-    }
-  }
-
   return { ...value, targets, steps };
+}
+
+/**
+ * @param {unknown} def
+ * @returns {TemplateDef}
+ */
+function validateTemplate(def) {
+  const parsed = templateSchema.safeParse(def);
+  if (!parsed.success) throw shapeError(parsed.error);
+  const value = parsed.data;
+  const steps = validateSteps({ kind: value.targetsKind, trigger: value.trigger, steps: value.steps });
+  return { ...value, steps };
 }
 
 module.exports = {
   validateAutomation,
+  validateTemplate,
   automationSchema,
+  templateSchema,
+  stepSchema,
+  triggerSchema,
+  scheduleTriggerSchema,
+  eventTriggerSchema,
   shapeError,
   assertValidCron,
   cronMinGapMs,

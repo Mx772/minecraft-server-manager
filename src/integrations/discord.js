@@ -157,6 +157,12 @@ async function testWebhook(serverId) {
   return { ok: true };
 }
 
+/** Whether this server has an enabled Discord webhook to post to. */
+function isConfigured(serverId) {
+  const r = row(serverId);
+  return Boolean(r && r.enabled && r.config_cipher && webhookUrl(serverId));
+}
+
 /**
  * Send a notification if the integration is enabled and has a webhook.
  * Never throws; failures are logged at most once per hour per server.
@@ -398,6 +404,7 @@ module.exports = {
   getConfig,
   setConfig,
   testWebhook,
+  isConfigured,
   notify,
   startEventBridge,
   stopEventBridge,

@@ -261,3 +261,96 @@ test('server tabs: settings, worlds, players, commands and chat embeds parse', a
   assertAllParse(`${base}/commands`, await page(`${base}/commands`), ['chat-commands-data'], []);
   assertAllParse(`${base}/chat`, await page(`${base}/chat`), ['chat-history'], []);
 });
+
+test('server automation tab: editor data, the preset server, and row definitions parse', async () => {
+  const automations = require('../src/automations');
+  const created = automations.createAutomation(
+    {
+      name: NASTY_NAME,
+      targets: { kind: 'servers', serverIds: [serverId] },
+      trigger: { type: 'schedule', cron: '0 4 * * *' },
+      steps: [{ offsetSec: 0, action: 'restart', condition: { type: 'players-online', min: 2 } }],
+    },
+    { actor: 'test' }
+  );
+  const everyone = automations.createAutomation(
+    {
+      name: 'Everywhere',
+      targets: { kind: 'all' },
+      trigger: { type: 'schedule', cron: '0 5 * * *' },
+      steps: [{ offsetSec: 0, action: 'restart' }],
+    },
+    { actor: 'test' }
+  );
+  try {
+    const url = `/servers/${serverId}/automation`;
+    const html = await page(url);
+    const { attrs } = assertAllParse(url, html, [], ['data-editor', 'data-def']);
+    assert.ok(html.includes(`data-server-id="${serverId}"`), 'the tab names its server for the editor');
+    assert.ok(html.includes('All Servers'), 'a row that runs on every server is marked');
+    const defs = attrs.filter((a) => a.name === 'data-def').map((a) => JSON.parse(a.raw));
+    assert.ok(defs.some((d) => d.name === NASTY_NAME && d.steps[0].condition.min === 2));
+  } finally {
+    automations.deleteAutomation(created.id, { actor: 'test' });
+    automations.deleteAutomation(everyone.id, { actor: 'test' });
+  }
+});
+
+test('event automations: the page and the server tab show the event in words and their JSON parses', async () => {
+  const automations = require('../src/automations');
+  const created = automations.createAutomation(
+    {
+      name: NASTY_NAME,
+      targets: { kind: 'servers', serverIds: [serverId] },
+      trigger: { type: 'event', event: 'on-crash' },
+      steps: [{ offsetSec: 0, action: 'discord', params: { message: NASTY_NAME } }],
+    },
+    { actor: 'test' }
+  );
+  try {
+    for (const url of ['/automations', `/servers/${serverId}/automation`]) {
+      const html = await page(url);
+      const { attrs } = assertAllParse(url, html, [], ['data-editor', 'data-def']);
+      assert.ok(html.includes('After the server crashes'), `${url} names the event`);
+      assert.ok(html.includes('On event'), `${url} says there is no next run`);
+      const editor = JSON.parse(attrs.find((a) => a.name === 'data-editor').raw);
+      assert.ok(editor.events.some((e) => e.key === 'on-crash' && e.label === 'After The Server Crashes'));
+      assert.ok(editor.actions.find((a) => a.key === 'discord').events.includes('on-crash'));
+      const def = attrs.filter((a) => a.name === 'data-def').map((a) => JSON.parse(a.raw));
+      assert.ok(def.some((d) => d.trigger.event === 'on-crash' && d.steps[0].params.message === NASTY_NAME));
+    }
+  } finally {
+    automations.deleteAutomation(created.id, { actor: 'test' });
+  }
+});
+
+test('file-step automations: rows describe the steps in words and the editor data carries the file forms', async () => {
+  const automations = require('../src/automations');
+  const created = automations.createAutomation(
+    {
+      name: NASTY_NAME,
+      targets: { kind: 'servers', serverIds: [serverId] },
+      trigger: { type: 'schedule', cron: '0 4 * * *' },
+      steps: [
+        { offsetSec: 0, action: 'copy-files', params: { from: 'custom/kubejs', to: 'kubejs' } },
+        { offsetSec: 0, action: 'delete-files', params: { path: 'logs', include: '**/*.log' } },
+      ],
+    },
+    { actor: 'test' }
+  );
+  try {
+    for (const url of ['/automations', `/servers/${serverId}/automation`]) {
+      const html = await page(url);
+      const { attrs } = assertAllParse(url, html, [], ['data-editor', 'data-def']);
+      assert.ok(html.includes('Copy custom/kubejs to kubejs (overwrite)'), `${url} describes the copy`);
+      assert.ok(html.includes('Delete **/*.log in logs'), `${url} describes the delete`);
+      const editor = JSON.parse(attrs.find((a) => a.name === 'data-editor').raw);
+      assert.equal(editor.actions.find((a) => a.key === 'copy-files').form, 'copy');
+      assert.equal(editor.actions.find((a) => a.key === 'delete-files').form, 'delete');
+      const defs = attrs.filter((a) => a.name === 'data-def').map((a) => JSON.parse(a.raw));
+      assert.ok(defs.some((d) => d.steps[1].params.include === '**/*.log'));
+    }
+  } finally {
+    automations.deleteAutomation(created.id, { actor: 'test' });
+  }
+});

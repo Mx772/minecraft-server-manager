@@ -18,6 +18,7 @@ const logger = require('../logger')(path.basename(__filename));
 const { serializeError } = require('../utils/logSanitize');
 const { ACTIONS } = require('./actions');
 const { leadMs, cronMinGapMs } = require('./schema');
+const { unmetReason } = require('./conditions');
 const store = require('./store');
 
 // A backup or start refused only because another action holds its server (a
@@ -87,12 +88,13 @@ function sleep(ms) {
  * after `afterAnchorMs`, so an anchor never fires twice), and the moment its
  * lead begins. Inside the lead window that moment is now, so the run starts
  * late rather than being skipped.
- * @param {{ trigger: { cron: string }, steps: Array<{ offsetSec: number }> }} automation
+ * @param {any} automation a schedule automation: `trigger.cron` and `steps`
  * @param {number} nowMs
  * @param {{ timezone?: string, afterAnchorMs?: number }} [opts]
  * @returns {{ anchorMs: number, fireMs: number } | null}
  */
 function nextFire(automation, nowMs, { timezone = getTimezone(), afterAnchorMs } = {}) {
+  if (automation.trigger.type !== 'schedule') return null; // an event has no next time
   const lead = leadMs(automation.steps);
   const after = Math.max(nowMs, afterAnchorMs ?? -Infinity);
   const anchor = new Cron(automation.trigger.cron, { timezone }).nextRun(new Date(after));
@@ -227,6 +229,69 @@ async function fire(id, anchorMs, { actor = 'automation', force = false, skipMis
   }
 }
 
+/** Event firings in progress, one per automation and server. @type {Set<string>} */
+const runningPairs = new Set();
+
+/**
+ * One firing of an event automation for one server: record it, run its steps,
+ * record the result. Skipped when that automation is already running for that
+ * server. Resolves with how the steps went; never throws.
+ * @param {{ id: string, name: string, steps: any[] }} automation
+ * @param {string} serverId
+ * @param {{ actor?: string, firedPhrase?: string, insideStartLock?: boolean, signal?: AbortSignal }} [opts] signal: stops
+ *   the run at its next step (or file); insideStartLock: the
+ *   caller is a start that already holds the server's lock, so steps must not take it again
+ * @returns {Promise<{ ran: boolean, status: string, error: string | null, stopped: boolean }>}
+ */
+async function fireForServer(
+  automation,
+  serverId,
+  { actor = 'automation', firedPhrase = '', insideStartLock = false, signal } = {}
+) {
+  const key = `${automation.id}:${serverId}`;
+  if (runningPairs.has(key)) {
+    logger.debug('Skipped an event firing because the same automation is still running for this server.', {
+      automationId: automation.id,
+      serverId,
+    });
+    return { ran: false, status: 'skipped', error: null, stopped: false };
+  }
+  runningPairs.add(key);
+  try {
+    db.run("UPDATE automations SET last_run_at = datetime('now') WHERE id = ?", automation.id);
+    recordEvent({
+      serverId,
+      actor,
+      type: 'automation-fired',
+      summary: `Automation fired${firedPhrase ? ` ${firedPhrase}` : ''}: ${automation.name}.`,
+    });
+    logger.info('An automation fired on an event.', { automationId: automation.id, serverId });
+    const result = await runSequence(/** @type {any} */ (automation), serverId, Date.now(), {
+      force: false,
+      skipMissed: false,
+      insideStartLock,
+      signal,
+      epoch,
+    });
+    db.run(
+      'UPDATE automations SET last_status = ?, last_error = ? WHERE id = ?',
+      result.status,
+      result.error,
+      automation.id
+    );
+    return { ran: true, ...result };
+  } catch (err) {
+    logger.error('An event firing failed unexpectedly.', {
+      automationId: automation.id,
+      serverId,
+      err: serializeError(err),
+    });
+    return { ran: true, status: 'failed', error: String(err.message || 'unknown error'), stopped: true };
+  } finally {
+    runningPairs.delete(key);
+  }
+}
+
 /**
  * Run an automation now with the anchor at this moment. Negative-offset steps
  * are already due, so they run back to back. Returns without waiting for the
@@ -247,9 +312,14 @@ function runNow(id, { actor = 'system' } = {}) {
 /**
  * One target's steps, in order. A failed step ends the sequence when its
  * onFailure is 'stop'. A sequence never throws: its outcome is the return value.
- * @returns {Promise<{ status: string, error: string | null }>}
+ * @returns {Promise<{ status: string, error: string | null, stopped: boolean }>}
  */
-async function runSequence(automation, serverId, anchorMs, { force, skipMissed, epoch: myEpoch }) {
+async function runSequence(
+  automation,
+  serverId,
+  anchorMs,
+  { force, skipMissed, insideStartLock = false, signal = undefined, epoch: myEpoch }
+) {
   const startedAt = Date.now();
   const runId = Number(
     db.run(
@@ -264,13 +334,14 @@ async function runSequence(automation, serverId, anchorMs, { force, skipMissed, 
   /** @type {Array<{ index: number, action: string, offsetSec: number, status: string, detail?: string }>} */
   const record = [];
   let error = null;
+  let stopped = false; // a failed step with onFailure 'stop' ended the sequence
   let failedLabel = '';
 
   for (let index = 0; index < automation.steps.length; index++) {
     const step = automation.steps[index];
     const wait = anchorMs + step.offsetSec * 1000 - Date.now();
     if (wait > 0) await sleep(wait);
-    if (myEpoch !== epoch) {
+    if (myEpoch !== epoch || (signal && signal.aborted)) {
       record.push({ index, action: step.action, offsetSec: step.offsetSec, status: 'aborted' });
       break;
     }
@@ -291,8 +362,18 @@ async function runSequence(automation, serverId, anchorMs, { force, skipMissed, 
     }
     try {
       if (!action) throw new Error(`Unknown action ${step.action}`);
+      if (step.condition) {
+        const unmet = await unmetReason(step.condition, serverId);
+        if (unmet) {
+          entry.status = 'skipped';
+          entry.detail = unmet;
+          continue;
+        }
+      }
       const outcome = await runStep(automation, step, action, serverId, server && server.display_name, {
         force,
+        insideStartLock,
+        signal,
       });
       if (outcome && outcome.skipped) {
         entry.status = 'skipped';
@@ -315,7 +396,10 @@ async function runSequence(automation, serverId, anchorMs, { force, skipMissed, 
         serverId: serverId || undefined,
         err: serializeError(err),
       });
-      if (step.onFailure !== 'continue') break;
+      if (step.onFailure !== 'continue') {
+        stopped = true;
+        break;
+      }
     }
   }
 
@@ -332,27 +416,28 @@ async function runSequence(automation, serverId, anchorMs, { force, skipMissed, 
     automation.id,
     KEEP_RUNS
   );
-  return { status, error };
+  return { status, error, stopped };
 }
 
 /** One step: shown in the tray when it is the kind a person would wonder about, with busy retries. */
-function runStep(automation, step, action, serverId, serverName, { force }) {
+function runStep(automation, step, action, serverId, serverName, { force, insideStartLock, signal }) {
   const params = action.params.parse(step.params ?? {});
   const title =
     action.trayVerb && serverName ? `${action.trayVerb} ${serverName} (automation)…` : action.trayTitle || null;
-  const run = (task) => runWithRetry(automation, step, action, params, serverId, task, { force });
+  const run = (task) =>
+    runWithRetry(automation, step, action, params, serverId, task, { force, insideStartLock, signal });
   if (!title) return run(null);
   // One tray entry covers every busy retry, so waiting does not flash a failure.
   return tasks.track(title, { serverId, actor: STEP_ACTOR }, run);
 }
 
-async function runWithRetry(automation, step, action, params, serverId, task, { force }) {
+async function runWithRetry(automation, step, action, params, serverId, task, { force, insideStartLock, signal }) {
   const { retryMs, maxWaitMs } = options;
   const firedAt = Date.now();
   const giveUpAt = firedAt + maxWaitMs;
   for (let attempt = 0; ; attempt++) {
     try {
-      return await action.run({ serverId, params, actor: STEP_ACTOR, task, automation });
+      return await action.run({ serverId, params, actor: STEP_ACTOR, task, automation, insideStartLock, signal });
     } catch (err) {
       const busy = err && err.code === 'BUSY';
       if (!busy || !action.retryWhenBusy || Date.now() + retryMs > giveUpAt) throw err;
@@ -384,6 +469,7 @@ module.exports = {
   arm,
   disarm,
   runNow,
+  fireForServer,
   stopAll,
   configureEngine,
   nextFire,

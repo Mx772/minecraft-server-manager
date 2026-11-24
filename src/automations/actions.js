@@ -7,6 +7,8 @@
 //   scope        'server' acts on one target server; 'panel' acts on the panel
 //   capability   per-server permission a server-scope action needs (services/permissions.js)
 //   adminOnly    panel actions that outrun any per-server grant
+//   events       the event triggers it may run on (see events.js); restart, stop, and
+//                start never are, since a lifecycle action on a lifecycle event can loop
 //   retryWhenBusy  a refusal only because another action holds the server is retried
 //   dropAfterLifecycleAction  a retried step is dropped if someone started or
 //                stopped the server meanwhile
@@ -17,6 +19,7 @@ const { z } = require('zod');
 const logger = require('../logger')(path.basename(__filename));
 const { recordEvent } = require('../events');
 const { serializeError } = require('../utils/logSanitize');
+const fileSteps = require('./fileSteps');
 
 /**
  * @typedef {object} ActionContext
@@ -25,6 +28,8 @@ const { serializeError } = require('../utils/logSanitize');
  * @property {string} actor always 'automation'
  * @property {{ step: (label: string) => void } | null} task the tray task, if shown there
  * @property {any} automation the automation being run
+ * @property {AbortSignal} [signal] aborts when the run must stop (a start that ran out of time)
+ * @property {boolean} [insideStartLock] true for a before-start step: the start holds the server's lock
  */
 
 /**
@@ -35,6 +40,7 @@ const { serializeError } = require('../utils/logSanitize');
  * @property {boolean} [adminOnly]
  * @property {import('zod').ZodType} params
  * @property {boolean} [retryWhenBusy]
+ * @property {string[]} [events] the events whose steps may use it; none means schedule triggers only
  * @property {boolean} [dropAfterLifecycleAction]
  * @property {string} [trayVerb]
  * @property {string} [trayTitle]
@@ -117,6 +123,7 @@ const ACTIONS = {
     scope: 'server',
     capability: 'backups',
     params: shrinkParams,
+    events: ['after-start', 'after-stop', 'on-crash', 'after-pack-install'],
     retryWhenBusy: true,
     trayVerb: 'Backing up',
     async run({ serverId, params, actor, task }) {
@@ -143,6 +150,7 @@ const ACTIONS = {
     scope: 'server',
     capability: 'console',
     params: z.object({ command: z.string().max(500).optional() }),
+    events: ['after-start', 'after-pack-install'],
     async run({ serverId, params, actor }) {
       const { execCapture } = require('../docker/containers');
       // '--' stops rcon-cli parsing command words that start with '-' as flags.
@@ -171,6 +179,7 @@ const ACTIONS = {
       text: z.string().trim().min(1).max(256),
       mode: z.enum(['say', 'tellraw']).default('tellraw'),
     }),
+    events: ['after-start', 'after-pack-install'],
     async run({ serverId, params, actor }) {
       try {
         await require('../services/chat').sendChat(serverId, { text: params.text, mode: params.mode, actor });
@@ -180,6 +189,56 @@ const ACTIONS = {
         if (err && err.status === 409) return { skipped: 'The server is not running.' };
         throw err;
       }
+    },
+  },
+
+  discord: {
+    label: 'Send Discord Notification',
+    scope: 'server',
+    capability: 'settings',
+    params: z.object({ message: z.string().trim().min(1).max(500) }),
+    events: ['before-start', 'after-start', 'after-stop', 'on-crash', 'after-pack-install'],
+    async run({ serverId, params, automation }) {
+      const discord = require('../integrations/discord');
+      if (!discord.isConfigured(serverId)) throw new Error('Discord notifications are not set up for this server.');
+      // notify() swallows delivery errors and answers false.
+      const sent = await discord.notify(serverId, 'alert', { title: automation.name, description: params.message });
+      if (!sent) throw new Error('Discord did not accept the notification.');
+    },
+  },
+
+  // File steps act on the target server's own folder, on a running server too. They
+  // take the server's operation lock (a restore must not have its folder changed
+  // under it) and wait their turn when it is busy; a before-start step is already
+  // inside the start's lock and skips it.
+  'copy-files': {
+    label: 'Copy files',
+    scope: 'server',
+    capability: 'files',
+    params: fileSteps.copyParams,
+    events: ['before-start', 'after-start', 'after-stop', 'on-crash', 'after-pack-install'],
+    retryWhenBusy: true,
+    async run({ serverId, params, actor, automation, insideStartLock, signal }) {
+      await fileSteps.runFileStep(
+        serverId,
+        { action: 'copy-files', params },
+        { actor, automationName: automation.name, insideStartLock, signal }
+      );
+    },
+  },
+  'delete-files': {
+    label: 'Delete files',
+    scope: 'server',
+    capability: 'files',
+    params: fileSteps.deleteParams,
+    events: ['before-start', 'after-start', 'after-stop', 'on-crash', 'after-pack-install'],
+    retryWhenBusy: true,
+    async run({ serverId, params, actor, automation, insideStartLock, signal }) {
+      await fileSteps.runFileStep(
+        serverId,
+        { action: 'delete-files', params },
+        { actor, automationName: automation.name, insideStartLock, signal }
+      );
     },
   },
 

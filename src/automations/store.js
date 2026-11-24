@@ -11,7 +11,8 @@ const httpError = require('../utils/httpError');
 const { recordEvent } = require('../events');
 const logger = require('../logger')(path.basename(__filename));
 const { serializeError } = require('../utils/logSanitize');
-const { validateAutomation } = require('./schema');
+const { validateAutomation, validateTemplate } = require('./schema');
+const { builtinTemplates } = require('./templates');
 const { ACTIONS } = require('./actions');
 
 /**
@@ -201,7 +202,7 @@ function listAutomations() {
       a.targets.kind === 'panel' ? '- panel -' : a.targets.kind === 'all' ? 'All servers' : servers.join(', ');
     return {
       ...a,
-      cron: a.trigger.cron,
+      cron: a.trigger.type === 'schedule' ? a.trigger.cron : null,
       target,
       servers,
       actionLabels: a.steps.map((s) => ACTIONS[s.action]?.label || s.action),
@@ -288,7 +289,97 @@ function seedPanelDefaults() {
   }
 }
 
+/**
+ * @typedef {import('./schema').TemplateDef & { id: string, builtin: boolean, createdBy: string | null,
+ *   createdAt: string | null }} Template
+ */
+
+/** @returns {Template} */
+function rowToTemplate(r) {
+  return {
+    ...JSON.parse(r.definition_json),
+    id: r.id,
+    name: r.name,
+    description: r.description,
+    builtin: false,
+    createdBy: r.created_by || null,
+    createdAt: r.created_at,
+  };
+}
+
+/** Built-in templates first, then the saved ones, oldest first. @returns {Template[]} */
+function listTemplates() {
+  const saved = db.all('SELECT * FROM automation_templates ORDER BY created_at, id').map(rowToTemplate);
+  return [...builtinTemplates().map((t) => ({ ...t, createdBy: null, createdAt: null })), ...saved];
+}
+
+/** @returns {Template | null} */
+function getTemplate(id) {
+  return listTemplates().find((t) => t.id === id) || null;
+}
+
+/**
+ * @param {unknown} def
+ * @param {{ actor?: string, userId?: string | null }} [opts]
+ */
+function createTemplate(def, { actor = 'system', userId = null } = {}) {
+  const value = validateTemplate(def);
+  const id = `tpl_${nanoid(8)}`;
+  db.run(
+    'INSERT INTO automation_templates (id, name, description, definition_json, created_by) VALUES (?, ?, ?, ?, ?)',
+    id,
+    value.name,
+    value.description,
+    JSON.stringify({
+      name: value.name,
+      description: value.description,
+      targetsKind: value.targetsKind,
+      trigger: value.trigger,
+      steps: value.steps,
+    }),
+    userId
+  );
+  recordEvent({
+    actor,
+    type: 'automation-template-created',
+    summary: `Automation template created: ${value.name}.`,
+  });
+  return getTemplate(id);
+}
+
+/**
+ * @param {string} id
+ * @param {{ actor?: string }} [opts]
+ */
+function deleteTemplate(id, { actor = 'system' } = {}) {
+  if (String(id).startsWith('builtin:')) throw httpError(400, "Built-in templates can't be deleted.");
+  const existing = getTemplate(id);
+  if (!existing) throw httpError(404, 'That template no longer exists.');
+  db.run('DELETE FROM automation_templates WHERE id = ?', id);
+  recordEvent({
+    actor,
+    type: 'automation-template-deleted',
+    summary: `Automation template deleted: ${existing.name}.`,
+  });
+}
+
+/** A template from an automation: its kind of target instead of the servers, nothing about its history. */
+function templateFromAutomation(automation) {
+  return {
+    name: automation.name,
+    description: '',
+    targetsKind: automation.targets.kind,
+    trigger: automation.trigger,
+    steps: automation.steps,
+  };
+}
+
 module.exports = {
+  listTemplates,
+  getTemplate,
+  createTemplate,
+  deleteTemplate,
+  templateFromAutomation,
   createAutomation,
   updateAutomation,
   setEnabled,

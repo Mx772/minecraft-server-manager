@@ -15,6 +15,28 @@ its own dated entry.
   An automation can run on one server, several servers, every server, or the panel itself, and each
   step can stop the rest or carry on when it fails. The page has a run history per automation, a
   **Run Now** button, and a live preview of the next three times.
+- **Step conditions.** A step on a server can have an **Only If** condition: the server is running,
+  at least a chosen number of players are online, or no players are online. A step whose condition
+  is not met is skipped, and the run history says why.
+- **Automation templates.** **New Automation** starts at a picker with built-in templates (Restart
+  With Warnings, Restart When Empty, Nightly Backup, Backup Then Restart, Scheduled Announcement) and
+  your own. **Save As Template** keeps the editor's form as a template. Templates export as a
+  `.msm-automation.json` file and import from one, with a review of every step before saving.
+- **An Automation tab on each server**, under Console, listing the automations that act on it, with
+  **Add From Template** and **New Automation** pre-set to that server.
+- **Event triggers.** An automation can run when something happens instead of on a schedule: before
+  the server starts (the start waits for the steps), after it starts, after it stops, after it crashes,
+  or after a modpack update installs. Steps on an event can wait up to an hour after it. Three new
+  built-in templates use them.
+- **Copy Files and Delete Files steps.** Copy a folder or files matching a pattern into another place
+  on the server (overwrite, skip existing files, or only if newer), or delete files matching a
+  pattern, on a schedule or on an event such as before the server starts. **Dry Run** in the editor
+  lists every file a step would create, overwrite, skip, or delete without changing anything, and the
+  editor asks for one before saving a Delete Files step. A warning appears when a copy lands in a
+  folder that a modpack install rewrites.
+- **Send Discord Notification step.** Posts a message to the server's Discord webhook, for example
+  when the server crashes.
+- Event types `automation-template-created` and `automation-template-deleted`.
 - Event types `automation-created`, `automation-updated`, `automation-toggled`, `automation-deleted`,
   `automation-fired`, and `automation-failed` (the last is a Discord alert).
 

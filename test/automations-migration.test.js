@@ -12,7 +12,9 @@ const { up } = require('../src/db/migrations/042_automations');
 
 test('schedules rows convert to automations and the table is renamed', () => {
   // Put the pre-042 shape back so the migration can run again over it.
-  db.exec('DROP TABLE automation_runs; DROP TABLE automations; DROP TABLE schedules_legacy;');
+  db.exec(
+    'DROP TABLE automation_templates; DROP TABLE automation_runs; DROP TABLE automations; DROP TABLE schedules_legacy;'
+  );
   db.exec(`CREATE TABLE schedules (
     id TEXT PRIMARY KEY, server_id TEXT, task_type TEXT NOT NULL, cron TEXT NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1,
@@ -51,4 +53,13 @@ test('schedules rows convert to automations and the table is renamed', () => {
   assert.equal(db.get("SELECT 1 AS x FROM sqlite_master WHERE name = 'schedules'"), undefined);
   assert.ok(db.get("SELECT 1 AS x FROM sqlite_master WHERE name = 'schedules_legacy'"));
   assert.equal(db.all('SELECT * FROM schedules_legacy').length, 3);
+
+  // Templates start empty and take a definition with its creator.
+  assert.equal(db.all('SELECT * FROM automation_templates').length, 0);
+  db.run(
+    "INSERT INTO automation_templates (id, name, definition_json, created_by) VALUES ('tpl_x', 'T', '{}', 'usr_1')"
+  );
+  const tpl = db.get("SELECT * FROM automation_templates WHERE id = 'tpl_x'");
+  assert.equal(tpl.description, '');
+  assert.ok(tpl.created_at && tpl.updated_at);
 });

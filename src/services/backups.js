@@ -258,7 +258,7 @@ async function restoreBackupCore(serverId, backupId, { actor = 'system', skipSaf
   // Guarded stopServer would deadlock here (this function already holds the
   // shared op lock under 'restore' - see module.exports) - use the raw impl.
   const { stopServerUnguarded } = require('./servers');
-  await stopServerUnguarded(serverId, { actor }).catch(() => {});
+  await stopServerUnguarded(serverId, { actor, internal: true }).catch(() => {});
   // NEVER rm -rf under a live container: verify the container really stopped.
   const info = await inspectStatus(serverId).catch(() => ({ exists: false }));
   if (info.exists && ['running', 'starting', 'unhealthy'].includes(info.status)) {
@@ -860,6 +860,8 @@ const NON_DATA_EVENT_TYPES = [
   'automation-updated',
   'automation-toggled',
   'automation-deleted',
+  'automation-template-created',
+  'automation-template-deleted',
   'schedule-fired',
   'schedule-failed',
   'schedule-created',

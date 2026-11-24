@@ -144,8 +144,18 @@ const BODY_SCOPED = [
       return targets && targets.kind === 'servers' && Array.isArray(targets.serverIds) ? targets.serverIds : null;
     },
   },
+  // A dry run or a warnings check names its server in the body (the definition's servers, or one `serverId`).
   {
-    re: /^\/api\/automations\/([^/]+)(?:\/|$)/,
+    re: /^\/api\/automations\/(?:dry-run|warnings)\/?$/,
+    id: (req) => {
+      const body = req.body || {};
+      const targets = body.definition && body.definition.targets;
+      return body.serverId || (targets && targets.kind === 'servers' ? targets.serverIds : null);
+    },
+  },
+  {
+    // Template writes name no server, so they never reach a row lookup: the global role decides.
+    re: /^\/api\/automations\/(?!(?:templates|dry-run|warnings)(?:\/|$))([^/]+)(?:\/|$)/,
     id: (req, m) => {
       const row = db.get('SELECT targets_json FROM automations WHERE id = ?', decodeSegment(m[1]));
       const targets = row ? JSON.parse(row.targets_json) : null;

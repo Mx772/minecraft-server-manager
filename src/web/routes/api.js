@@ -1997,7 +1997,7 @@ router.post(
         if (autoStopStart && (await worldShrink.isLive(server.id))) {
           wasRunning = true;
           t.step('Stopping the server…');
-          await servers.stopServer(server.id, { actor });
+          await servers.stopServer(server.id, { actor, internal: true });
         }
         t.step('Scanning region files for rarely-visited chunks…');
         let result;

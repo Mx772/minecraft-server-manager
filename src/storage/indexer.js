@@ -263,7 +263,7 @@ async function enforceStrictQuotas() {
         usedBytes: used,
         quotaBytes: s.disk_quota_bytes,
       });
-      await stopServer(s.id, { actor: 'system' }).catch((err) => {
+      await stopServer(s.id, { actor: 'system', internal: true }).catch((err) => {
         logger.error('Could not stop a server that exceeded its strict disk quota.', {
           serverId: s.id,
           err: serializeError(err),

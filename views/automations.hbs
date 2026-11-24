@@ -3,6 +3,10 @@
 {{#if canCreate}}
 <div class="mb-4 flex flex-col sm:flex-row sm:items-center gap-2">
   <button class="btn btn-primary" id="automation-new">{{{icon 'plus' 'size-4'}}} New Automation</button>
+  {{#if canTemplates}}
+    <button class="btn" id="automation-import" type="button">{{{icon 'upload' 'size-4'}}} Import Template</button>
+    <input type="file" id="automation-import-file" accept=".json,application/json" hidden>
+  {{/if}}
 </div>
 {{/if}}
 

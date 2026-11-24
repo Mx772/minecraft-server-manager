@@ -1,0 +1,16 @@
+<div class="mb-4 flex flex-col sm:flex-row sm:items-center gap-2">
+  {{#if canCreateHere}}
+    <button class="btn btn-primary" id="automation-from-template" type="button">{{{icon 'layout-template' 'size-4'}}} Add From Template</button>
+    <button class="btn" id="automation-new" type="button">{{{icon 'plus' 'size-4'}}} New Automation</button>
+  {{/if}}
+  <a class="btn btn-ghost sm:ml-auto" href="/automations">Open Automation Page</a>
+</div>
+
+{{#if autoRows.length}}
+  {{> automation-table rows=autoRows compact=true}}
+{{else}}
+  {{> empty-state iconName='workflow' title='No Automations For This Server Yet' message='Warn players, restart, and back up this server on a schedule, starting from a template or from scratch.'}}
+{{/if}}
+
+<div id="msm-automation-data" hidden data-editor="{{jsonAttr editorData}}" data-server-id="{{server.id}}"></div>
+<script type="module" src="/js/pages/automations.js"></script>
