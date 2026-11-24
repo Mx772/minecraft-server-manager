@@ -986,20 +986,79 @@ router.get('/backups', (req, res) => {
   });
 });
 
-router.get('/schedules', (req, res) => {
-  const scheduler = require('../../services/scheduler');
-  res.render('schedules', {
-    title: 'Schedules',
-    active: 'schedules',
-    schedules: scheduler.listSchedules().filter((j) => !j.serverId || res.locals.visibleServerIds.has(j.serverId)),
-    taskTypes: Object.entries(scheduler.TASK_TYPES)
-      .filter(([, t]) => !t.adminOnly || (req.user && req.user.role === 'admin'))
-      .map(([value, t]) => ({
-        value,
-        label: t.label,
-        serverScoped: t.serverScoped,
-      })),
-    serverOptions: (res.locals.servers || []).map((s) => ({ id: s.id, name: s.name })),
+router.get('/schedules', (req, res) => res.redirect('/automations'));
+
+// How each action's settings are edited in the Automation editor.
+const ACTION_FORMS = { message: 'message', command: 'command', backup: 'shrink', 'backup-all': 'shrink' };
+
+/** "Back up all servers" -> "Back Up All Servers": action names read as Title Case choices. */
+function titleCase(text) {
+  return String(text).replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+/** "3 steps: Send Message, Restart Server", cut short for a table cell. */
+function stepSummary(steps) {
+  const names = steps.map((s) => titleCase((automationsApi().ACTIONS[s.action] || { label: s.action }).label));
+  const text = `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}: ${names.join(', ')}`;
+  return text.length > 70 ? `${text.slice(0, 69)}…` : text;
+}
+
+function automationsApi() {
+  return require('../../automations');
+}
+
+router.get('/automations', (req, res) => {
+  const automations = automationsApi();
+  const { canChange, isVisibleTo } = require('../automationAccess');
+  const visible = res.locals.visibleServerIds;
+  const rows = automations
+    .listAutomations()
+    .filter((a) => isVisibleTo(visible, a))
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      enabled: a.enabled,
+      panel: a.targets.kind === 'panel',
+      runsOn: a.targets.kind === 'panel' ? 'Panel' : a.targets.kind === 'all' ? 'All Servers' : a.servers.join(', '),
+      cron: a.cron,
+      summary: stepSummary(a.steps),
+      next: a.next,
+      nextMs: a.nextMs,
+      lastStatus: a.lastStatus,
+      lastOk: a.lastStatus === 'ok',
+      lastPartial: a.lastStatus === 'partial',
+      lastFailed: a.lastStatus === 'failed',
+      canEdit: canChange(req.user, a),
+      def: { name: a.name, enabled: a.enabled, targets: a.targets, trigger: a.trigger, steps: a.steps },
+    }));
+  const role = req.user && req.user.role;
+  const catalog = Object.entries(automations.ACTIONS).map(([key, a]) => ({
+    key,
+    label: titleCase(a.label),
+    scope: a.scope,
+    capability: a.capability || null,
+    adminOnly: Boolean(a.adminOnly),
+    form: ACTION_FORMS[key] || null,
+  }));
+  // Servers the user may do something to, with what they may do (per-action choices follow it).
+  const serverOptions = (res.locals.servers || [])
+    .map((s) => ({ id: s.id, name: s.name, caps: permissions.effective(req.user, s.id) }))
+    .filter((s) => s.caps.some((c) => c !== 'view'));
+  const canPanel = role !== 'viewer';
+  res.render('automations', {
+    title: 'Automation',
+    active: 'automations',
+    serverRows: rows.filter((r) => !r.panel),
+    panelRows: rows.filter((r) => r.panel),
+    hasRows: rows.length > 0,
+    canCreate: serverOptions.length > 0 || canPanel,
+    editorData: {
+      servers: serverOptions,
+      actions: catalog,
+      canAll: role === 'admin',
+      canPanel,
+      isAdmin: role === 'admin',
+    },
   });
 });
 

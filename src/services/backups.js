@@ -854,6 +854,12 @@ function sleep(ms) {
 // type added later) counts as a possible change, so a new type errs toward one
 // extra backup rather than a skipped one.
 const NON_DATA_EVENT_TYPES = [
+  'automation-fired',
+  'automation-failed',
+  'automation-created',
+  'automation-updated',
+  'automation-toggled',
+  'automation-deleted',
   'schedule-fired',
   'schedule-failed',
   'schedule-created',

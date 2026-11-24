@@ -465,8 +465,14 @@ async function createServerImpl(input, { actor = 'system', start = false, onProg
     try {
       const h = 2 + Math.floor(Math.random() * 4);
       const m = Math.floor(Math.random() * 60);
-      require('./scheduler').createSchedule(
-        { serverId: id, taskType: 'backup', cron: `${m} ${h} * * *`, enabled: true },
+      require('../automations').createAutomation(
+        {
+          name: 'Daily Backup',
+          enabled: true,
+          targets: { kind: 'servers', serverIds: [id] },
+          trigger: { type: 'schedule', cron: `${m} ${h} * * *` },
+          steps: [{ offsetSec: 0, action: 'backup', params: {}, onFailure: 'stop' }],
+        },
         { actor }
       );
     } catch (err) {
@@ -1176,19 +1182,9 @@ async function deleteServerImpl(
   // Full cleanup cascade - without it schedules keep firing, backups pile up,
   // and server_content rows block library deletions forever.
 
-  // Schedules: disarm the live cron jobs, not just the rows.
-  const scheduler = require('./scheduler'); // lazy - avoids a require cycle
-  for (const sched of db.all('SELECT id FROM schedules WHERE server_id = ?', id)) {
-    try {
-      scheduler.deleteSchedule(sched.id, { actor });
-    } catch (err) {
-      logger.error('Could not delete a schedule while deleting its server.', {
-        serverId: id,
-        scheduleId: sched.id,
-        err: serializeError(err),
-      });
-    }
-  }
+  // Automations: drop the server from their targets (an automation left with
+  // no servers is deleted), so nothing keeps firing at a server that is gone.
+  require('../automations').removeServerFromTargets(id, { actor });
 
   // Backups: DB rows + the files directory (optional - keep them for reuse).
   if (!keepBackups) {

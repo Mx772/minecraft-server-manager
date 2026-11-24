@@ -57,7 +57,7 @@ On the **Backups** tab, tick **"Shrink World Afterwards"** before
 undo), then the world is shrunk, but only if the server is stopped. If the
 server is running, the backup still runs and the shrink is skipped with a note.
 
-Scheduled backups have the same option: in the schedule editor, choose the
-**Backup** task and tick **"Shrink the World After Each Backup"**. Pair it with
-a **Stop server** schedule a few minutes earlier if you want it to run
+Scheduled backups have the same option: in the automation editor, add a
+**Backup** step and tick **"Trim Unused Chunks After Backup"**. Pair it with
+a **Stop Server** step a few minutes earlier if you want it to run
 unattended.

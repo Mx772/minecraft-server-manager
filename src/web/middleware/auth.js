@@ -134,13 +134,22 @@ function decodeSegment(seg) {
 // Writes that name their server in the body or via a row lookup rather than the
 // path. Each of these routes carries its own per-server capability check; this
 // list only decides whether a viewer reaches it at all.
+/** @type {Array<{ re: RegExp, id: (req: any, m: RegExpExecArray) => any }>} */
 const BODY_SCOPED = [
-  { re: /^\/api\/schedules\/?$/, id: (req) => req.body && req.body.serverId },
+  // An automation names several servers: its body's targets on create, the stored row's on any later write.
   {
-    re: /^\/api\/schedules\/([^/]+)(?:\/|$)/,
+    re: /^\/api\/automations\/?$/,
+    id: (req) => {
+      const targets = req.body && req.body.targets;
+      return targets && targets.kind === 'servers' && Array.isArray(targets.serverIds) ? targets.serverIds : null;
+    },
+  },
+  {
+    re: /^\/api\/automations\/([^/]+)(?:\/|$)/,
     id: (req, m) => {
-      const row = db.get('SELECT server_id FROM schedules WHERE id = ?', decodeSegment(m[1]));
-      return row ? row.server_id : null;
+      const row = db.get('SELECT targets_json FROM automations WHERE id = ?', decodeSegment(m[1]));
+      const targets = row ? JSON.parse(row.targets_json) : null;
+      return targets && targets.kind === 'servers' ? targets.serverIds : null;
     },
   },
   { re: /^\/api\/worlds\/extract\/?$/, id: (req) => req.body && req.body.serverId },
@@ -149,28 +158,38 @@ const BODY_SCOPED = [
   { re: /^\/api\/updates\/ignore\/?$/, id: (req) => req.body && req.body.serverId },
 ];
 
-/** 'allow' | 'hidden' | 'deny' for a viewer's write, based on the server in the path or body. */
+/**
+ * 'allow' | 'hidden' | 'deny' for a viewer's write, based on the server(s) in the path or body.
+ * A write naming several servers is hidden when any is hidden and allowed only when every one allows.
+ */
 function viewerServerVerdict(req) {
-  let serverId = null;
+  /** @type {unknown} */
+  let named = null;
   const m = SERVER_SCOPED.exec(req.path);
-  if (m) serverId = decodeSegment(m[1]);
+  if (m) named = decodeSegment(m[1]);
   else {
     const b = BACKUP_SCOPED.exec(req.path);
-    if (b) serverId = backupServerId({ params: { backupId: decodeSegment(b[1]) } });
+    if (b) named = backupServerId({ params: { backupId: decodeSegment(b[1]) } });
     else {
       for (const entry of BODY_SCOPED) {
         const bm = entry.re.exec(req.path);
         if (!bm) continue;
-        const id = entry.id(req, bm);
-        serverId = typeof id === 'string' && id ? id : null;
+        named = entry.id(req, bm);
         break;
       }
     }
   }
-  if (!serverId || !db.get('SELECT 1 AS x FROM servers WHERE id = ? AND deleted_at IS NULL', serverId)) return 'deny';
-  const perms = permissions.effective(req.user, serverId);
-  if (!perms.includes('view')) return 'hidden';
-  return perms.some((c) => c !== 'view') ? 'allow' : 'deny';
+  const ids = Array.isArray(named) ? named : [named];
+  if (!ids.length) return 'deny';
+  let verdict = 'allow';
+  for (const serverId of ids) {
+    if (typeof serverId !== 'string' || !serverId) return 'deny';
+    if (!db.get('SELECT 1 AS x FROM servers WHERE id = ? AND deleted_at IS NULL', serverId)) return 'deny';
+    const perms = permissions.effective(req.user, serverId);
+    if (!perms.includes('view')) return 'hidden';
+    if (!perms.some((c) => c !== 'view')) verdict = 'deny';
+  }
+  return verdict;
 }
 
 /** Reject cross-origin state changes (defense in depth next to the SameSite cookie). */

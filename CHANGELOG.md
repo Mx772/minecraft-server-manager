@@ -7,6 +7,24 @@ its own dated entry.
 
 ## [Unreleased]
 
+### Added
+
+- **Automation page, with timed steps.** An automation is a cron schedule plus an ordered list of steps,
+  each set to a time relative to the schedule (for example 5 minutes before, at, or 30 seconds after).
+  A restart every 4 hours can now warn players 5 minutes and 1 minute ahead with **Send Message** steps.
+  An automation can run on one server, several servers, every server, or the panel itself, and each
+  step can stop the rest or carry on when it fails. The page has a run history per automation, a
+  **Run Now** button, and a live preview of the next three times.
+- Event types `automation-created`, `automation-updated`, `automation-toggled`, `automation-deleted`,
+  `automation-fired`, and `automation-failed` (the last is a Discord alert).
+
+### Changed
+
+- **Automation replaces Schedules.** The Schedules page, `/api/schedules`, and the `schedules` table are
+  replaced by Automation, `/api/automations`, and new tables. Existing schedules carry over
+  automatically as one-step automations with the same timing, on/off state, and last run, and
+  `/schedules` redirects to the new page. The old table is kept, unused, for one release.
+
 ## [1.0.0] - 2026-11-21
 
 The first release of this fork, and the start of its own version numbers: from here on, releases

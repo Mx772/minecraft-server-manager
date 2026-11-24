@@ -69,7 +69,7 @@ const defaults = {
 
 const servers = require('../src/services/servers');
 const { dataPath } = require('../src/storage/pathGuard');
-const scheduler = require('../src/services/scheduler');
+const automations = require('../src/automations');
 
 const events = (id, type) => db.all('SELECT * FROM events WHERE server_id = ? AND type = ?', id, type);
 const row = (id) => db.get('SELECT * FROM servers WHERE id = ?', id);
@@ -88,7 +88,8 @@ test.beforeEach(() => {
 });
 
 test.after(() => {
-  for (const r of db.all('SELECT id FROM schedules')) scheduler.deleteSchedule(r.id);
+  for (const r of db.all('SELECT id FROM automations')) automations.deleteAutomation(r.id);
+  automations.stopAll();
 });
 
 test('createServer inserts the row with defaults, makes the dirs, builds the container, and records an event', async () => {
@@ -183,13 +184,16 @@ test('a failed create does not break the next one (serialized chain)', async () 
 
 test('new servers get a staggered daily backup schedule unless autoBackup is off', async () => {
   const s = await servers.createServer({ name: 'Backed', type: 'PAPER' });
-  const sched = db.all('SELECT * FROM schedules WHERE server_id = ?', s.id);
+  const mine = (id) => automations.listAutomations().filter((a) => a.targets.serverIds?.includes(id));
+  const sched = mine(s.id);
   assert.equal(sched.length, 1);
-  assert.equal(sched[0].task_type, 'backup');
+  assert.equal(sched[0].name, 'Daily Backup');
+  assert.deepEqual(sched[0].targets, { kind: 'servers', serverIds: [s.id] });
+  assert.equal(sched[0].steps[0].action, 'backup');
   const [m, h] = sched[0].cron.split(' ').map(Number);
   assert.ok(h >= 2 && h <= 5 && m >= 0 && m < 60, sched[0].cron);
   const off = await create();
-  assert.equal(db.all('SELECT 1 FROM schedules WHERE server_id = ?', off.id).length, 0);
+  assert.equal(mine(off.id).length, 0);
 });
 
 test('create with start:true starts the server after creating it', async () => {

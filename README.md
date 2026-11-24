@@ -78,7 +78,7 @@ designed, reviewed and tested by a human. The details are in [AI-DECLARATION.md]
 - 📚 Shared **sha256-deduplicated mod library**, hard-linked into servers; custom mods survive pack updates
 - 🖥️ **Live console** over WebSocket, RCON command bar, log filters, player quick-actions
 - 👮 **Player moderation**: whitelist, ops, bans, IP bans, teleports, online via RCON and offline via JSON edits
-- 💾 **Save-safe backups** with retention you set panel-wide or per server + cron **schedules** (restart / backup / RCON, plus fleet-wide back up all and restart all)
+- 💾 **Save-safe backups** with retention you set panel-wide or per server + cron **automations**: timed steps (in-game warnings, restart, backup, commands) for one server, several, or all, plus fleet-wide back up all and restart all
 - 📜 **Blueprints** (`.mcserver.zip`): portable server recipes you export, import anywhere, and get the same server from
 - 🔥 **Crash forensics**: auto-detected, parsed, suspects identified, plus one-click **mclo.gs sharing and automated insights**
 - 🗺️ One-click **BlueMap live map**, served through the panel's authenticated proxy
@@ -261,7 +261,7 @@ pm2 save
     <td><img src="docs/screenshots/11-chat-commands.png" alt="Custom chat commands"><br><sub><b>Custom chat commands</b>: owner-defined <code>!triggers</code> (RTP, warp, console) with cooldowns &amp; permissions.</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/14-schedules.png" alt="Schedules"><br><sub><b>Schedules</b>: per-server and global cron tasks (restart / backup / RCON) with next-run previews.</sub></td>
+    <td><img src="docs/screenshots/14-schedules.png" alt="Automation"><br><sub><b>Automation</b>: cron automations with timed steps (warn, restart, back up, run commands) and next-run previews.</sub></td>
     <td><img src="docs/screenshots/15-storage.png" alt="Storage analytics"><br><sub><b>Storage analytics</b>: per-server usage, largest files, orphan detection, and panel-enforced quotas.</sub></td>
   </tr>
   <tr>
@@ -345,7 +345,7 @@ Not affiliated with any of them.
 - **Player moderation**: whitelist, ops (levels 1 to 4), bans, IP bans; via RCON while running and via
   direct JSON edits while stopped ("applies on start"). Teleport by coordinates, to a player, or to
   the nearest biome.
-- **Backups & schedules**: save-safe archive/restore with free-space preflight and retention per
+- **Backups & automation**: save-safe archive/restore with free-space preflight and retention per
   backup reason, plus optional age and total-size limits. Admins set them panel-wide in **Settings →
   Backup Retention** and per server under **Retention for This Server** on its Backups tab; saving
   shows what would be removed and offers **Remove Now** or **From Next Backup**. Every new server is
@@ -385,7 +385,7 @@ Not affiliated with any of them.
   median; evidence laid out, never auto-punishing.
 - **Discord**: webhook notifications (lifecycle, crashes, backups, updates, player actions) with
   per-event toggles, plus an **Alerts** category (out of memory, unhealthy, stalled boot, stop
-  failed, failed schedule, quota stop, offline after a restart, crash restarts given up, a port change
+  failed, failed automation, quota stop, offline after a restart, crash restarts given up, a port change
   that left the server down) that's on by default. URLs
   stored encrypted. See the [integrations guide](docs/integrations.md).
 - **Invites & client modpacks**: a paste-ready invite block plus a generated client `.mrpack` with

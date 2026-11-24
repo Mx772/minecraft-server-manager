@@ -24,7 +24,7 @@ A complete, self-hosted control panel for [itzg/docker-minecraft-server](https:/
 - **[Per-server chatbot](chatbot.md)**: local/OpenAI-compatible conversation, outreach, retained transcripts, and constrained gameplay powers.
 - **[Backups](backups.md)**: one-click snapshots, scheduled backups, how many to keep (panel-wide or per server), and restore.
 - **[Blueprints](blueprints.md)**: capture a server's whole configuration and stamp out new ones from it.
-- **[Schedules](schedules.md)**: cron-driven restarts, backups, and commands.
+- **[Automation](automations.md)**: cron-driven restarts, backups, commands, and in-game warnings, with timed steps.
 - **[Storage](storage.md)**: per-server disk usage and panel-enforced quotas.
 - **[Updates](updates.md)**: track new server, pack, image, and mod versions, check which Minecraft versions your mods support, and undo a mod update.
 - **[Activity log](activity.md)**: an audit trail of everything that happened.

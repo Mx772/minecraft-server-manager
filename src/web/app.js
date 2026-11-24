@@ -391,6 +391,7 @@ function createApp() {
   app.use(requireWrite);
 
   app.use('/api/analytics', require('./routes/analyticsGlobal'));
+  app.use('/api/automations', require('./routes/automations'));
   app.use('/api', require('./routes/api'));
   app.use('/api/tasks', require('./routes/tasks'));
   app.use('/api/solver', require('./routes/solver'));

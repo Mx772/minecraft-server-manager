@@ -1,0 +1,32 @@
+{{> page-header heading="AUTOMATION" sub="Run restarts, backups, messages, and commands on a schedule, with each step at its own time."}}
+
+{{#if canCreate}}
+<div class="mb-4 flex flex-col sm:flex-row sm:items-center gap-2">
+  <button class="btn btn-primary" id="automation-new">{{{icon 'plus' 'size-4'}}} New Automation</button>
+</div>
+{{/if}}
+
+{{#if hasRows}}
+<section class="mb-6">
+  <h3 class="mb-2 font-semibold">Server Automations</h3>
+  {{#if serverRows.length}}
+    {{> automation-table rows=serverRows}}
+  {{else}}
+    {{> empty-state iconName='workflow' title='No Server Automations Yet' message='Warn players, restart, and back up your servers on a schedule. Use New Automation above to create the first one.'}}
+  {{/if}}
+</section>
+
+<section>
+  <h3 class="mb-2 font-semibold">Panel Maintenance</h3>
+  {{#if panelRows.length}}
+    {{> automation-table rows=panelRows}}
+  {{else}}
+    {{> empty-state iconName='workflow' title='No Panel Maintenance Yet' message='Update checks, storage scans, and cleanups for the panel itself show up here.'}}
+  {{/if}}
+</section>
+{{else}}
+  {{> empty-state iconName='workflow' title='No Automations Yet' message='Warn players, restart, and back up your servers on a schedule. Use New Automation above to create the first one.'}}
+{{/if}}
+
+<div id="msm-automation-data" hidden data-editor="{{jsonAttr editorData}}"></div>
+<script type="module" src="/js/pages/automations.js"></script>

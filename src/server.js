@@ -180,7 +180,7 @@ function startBackgroundServices(httpServer) {
   require('./ws').attachWebSockets(httpServer);
   require('./storage/indexer').startIndexer();
   require('./crashes').startCrashWatcher({});
-  require('./services/scheduler').startScheduler();
+  require('./automations').startAutomations();
   require('./integrations/discord').startEventBridge();
   require('./services/inventory').startSnapshotWatcher();
   require('./services/wizard').startOutreachWatcher();
@@ -246,7 +246,7 @@ function startBackgroundServices(httpServer) {
       logger.error('Pruning event history or API cache failed.', { err: serializeError(err) });
     }
     // Snapshot the panel's own state (DB + key files) - the server backups only
-    // cover per-server world dirs, so without this the users/schedules/pins/
+    // cover per-server world dirs, so without this the users/automations/pins/
     // history/2FA store has no backup at all. Retention lives in panelBackup.
     try {
       const { name, blockedMs } = await require('./storage/panelBackup').snapshotNightly();

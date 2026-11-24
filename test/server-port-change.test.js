@@ -428,8 +428,8 @@ test('a slow server create never blocks a port change', async (t) => {
   mockDocker(t);
   let finishPull;
   t.mock.method(images, 'ensureImage', () => new Promise((r) => (finishPull = r)));
-  // A new server seeds a backup schedule, whose cron timer would keep this process alive.
-  t.mock.method(require('../src/services/scheduler'), 'createSchedule', () => {});
+  // A new server seeds a backup automation, whose cron timer would keep this process alive.
+  t.mock.method(require('../src/automations'), 'createAutomation', () => {});
   seed('srv_a', P(0));
   const creating = servers.createServer({ name: 'Slow', type: 'VANILLA', mcVersion: '1.21.1' }, { actor: 'test' });
   while (!finishPull) await new Promise((r) => setImmediate(r)); // the create is now pulling its image

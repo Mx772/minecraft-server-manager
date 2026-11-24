@@ -61,6 +61,7 @@ const EVENT_MAP = {
   'startup-stalled': ['alert', 'alerts'],
   'stop-failed': ['alert', 'alerts'],
   'schedule-failed': ['alert', 'alerts'],
+  'automation-failed': ['alert', 'alerts'],
   'quota-exceeded': ['alert', 'alerts'],
   'offline-after-restart': ['alert', 'alerts'],
   // A port change that could not even put the server back, and a crash restart
@@ -383,6 +384,7 @@ function titleFor(type) {
     'startup-stalled': 'Startup stalled',
     'stop-failed': 'Stop failed',
     'schedule-failed': 'Scheduled task failed',
+    'automation-failed': 'Automation failed',
     'quota-exceeded': 'Disk quota exceeded',
     'offline-after-restart': 'Offline after panel restart',
     'port-change-failed': 'Port change left the server down',

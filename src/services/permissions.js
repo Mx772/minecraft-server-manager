@@ -56,7 +56,7 @@ const CAPABILITY_INFO = {
     label: 'View',
     help: 'See the server, its status, console output, players, history, and stats.',
     covers: [
-      'See the server in the sidebar, dashboard, and every fleet-wide list (backups, worlds, schedules, activity, updates).',
+      'See the server in the sidebar, dashboard, and every fleet-wide list (backups, worlds, automations, activity, updates).',
       'Open every tab: overview, console output, players, mods, worlds, map, backups, history, live stats, settings (read-only).',
       'Watch the live console and stats over the panel sockets and open the live map.',
     ],
@@ -85,7 +85,7 @@ const CAPABILITY_INFO = {
       'POST /api/servers/:id/restart',
       'POST /api/servers/:id/kill',
       'POST /api/servers/:id/recreate',
-      'POST /api/schedules (restart, stop, start)',
+      'POST /api/automations (restart, stop, start)',
     ],
   },
   console: {
@@ -105,7 +105,7 @@ const CAPABILITY_INFO = {
       'POST /api/servers/:id/chat',
       'POST /api/servers/:id/world/quick',
       'WRITES /api/servers/:id/chat-commands/*',
-      'POST /api/schedules (rcon)',
+      'POST /api/automations (command, message)',
     ],
   },
   players: {
@@ -174,7 +174,7 @@ const CAPABILITY_INFO = {
       'PATCH /api/backups/:backupId',
       'DELETE /api/backups/:backupId',
       'POST /api/backups/:backupId/verify',
-      'POST /api/schedules (backup)',
+      'POST /api/automations (backup)',
     ],
   },
   files: {
