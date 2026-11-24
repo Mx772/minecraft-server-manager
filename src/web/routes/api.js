@@ -2224,10 +2224,21 @@ router.put(
   requireCap('files'),
   modConfigJsonParser,
   asyncHandler(async (req, res) => {
-    const { path: filePath, content } = z
-      .object({ path: z.string().min(1).max(1024), content: z.string().max(2 * 1024 * 1024) })
+    const {
+      path: filePath,
+      content,
+      customize,
+    } = z
+      .object({
+        path: z.string().min(1).max(1024),
+        content: z.string().max(2 * 1024 * 1024),
+        customize: z.boolean().optional(),
+      })
       .parse(req.body);
-    res.json({ ok: true, ...(await modConfigs.write(req.params.id, filePath, content, { actor: req.user.username })) });
+    res.json({
+      ok: true,
+      ...(await modConfigs.write(req.params.id, filePath, content, { actor: req.user.username, customize })),
+    });
   })
 );
 

@@ -2,6 +2,7 @@
 
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const db = require('../db');
 const { dataPath, safeJoin } = require('../storage/pathGuard');
 const httpError = require('../utils/httpError');
 const jarMeta = require('./jarMeta');
@@ -29,12 +30,49 @@ const MAX_SCAN_DEPTH = 12;
 const STAT_CONCURRENCY = 8;
 const JAR_FOLDERS = ['mods', 'plugins'];
 
-function configRoots(serverId) {
+function mustServer(serverId) {
   const server = require('./servers').getServer(serverId);
   if (!server) throw httpError(404, 'Server not found.');
+  return server;
+}
+
+/** The per-world config folder (`<level>/serverconfig`), which a pack update never overwrites. */
+function worldConfigRoot(server) {
   const level = String(server.env?.LEVEL || 'world');
   const safeLevel = /^[A-Za-z0-9 _.-]{1,64}$/.test(level) ? level : 'world';
-  return ['config', 'defaultconfigs', `${safeLevel}/serverconfig`];
+  return `${safeLevel}/serverconfig`;
+}
+
+function configRoots(serverId) {
+  return ['config', 'defaultconfigs', worldConfigRoot(mustServer(serverId))];
+}
+
+/**
+ * How a config file relates to customizations, for the editor:
+ * customized: it has a copy that is put back on every start.
+ * managed: a panel feature owns it (Recommended Setup, the Discord bridge).
+ * world: it lives in the world's serverconfig folder, which pack updates leave alone.
+ * available: a modpack server's file that a pack update could overwrite.
+ * none: not a modpack server, so nothing overwrites it.
+ * @param {string} serverId @param {string[]} paths
+ * @returns {Promise<Map<string, 'customized'|'managed'|'world'|'available'|'none'>>}
+ */
+async function customizationStates(serverId, paths) {
+  // Mid-function require (cycle-breaker): customizations -> files -> servers.
+  const customizations = require('./customizations');
+  const server = mustServer(serverId);
+  const worldRoot = `${worldConfigRoot(server)}/`;
+  const customized = await customizations.customizedPaths(serverId).catch(() => new Set());
+  const owned = customizations.ownedOrProtectedPaths(serverId);
+  const packServer = Boolean(db.get('SELECT 1 AS x FROM server_packs WHERE server_id = ?', serverId));
+  const states = new Map();
+  for (const rel of paths) {
+    if (owned.has(rel)) states.set(rel, 'managed');
+    else if (customized.has(rel)) states.set(rel, 'customized');
+    else if (rel.startsWith(worldRoot)) states.set(rel, 'world');
+    else states.set(rel, packServer ? 'available' : 'none');
+  }
+  return states;
 }
 
 /** Normalized, space-separated lowercase words (letters and digits only). */
@@ -181,8 +219,13 @@ async function list(serverId) {
     descriptions: mod.descriptions,
   }));
   const tokenIndex = buildTokenIndex(detected);
+  const states = await customizationStates(
+    serverId,
+    files.map((file) => file.path)
+  );
   const unassigned = [];
   for (const file of files) {
+    file.customized = states.get(file.path) === 'customized';
     const match = singleMatch(file.path, tokenIndex);
     if (match >= 0) groups[match].files.push(file);
     else unassigned.push(file);
@@ -226,18 +269,38 @@ async function read(serverId, relPath) {
   const content = await fsp.readFile(abs);
   if (content.includes(0)) throw httpError(415, 'This config is not a text file.');
   const normalized = String(relPath).replace(/\\/g, '/');
+  const states = await customizationStates(serverId, [normalized]);
   return {
     path: normalized,
     content: content.toString('utf8'),
     descriptions: descriptionsFor(serverId, normalized),
+    customization: states.get(normalized),
   };
 }
 
-/** @param {string} serverId @param {string} relPath @param {string} content @param {{actor?: string}} [options] */
-async function write(serverId, relPath, content, { actor } = {}) {
+/**
+ * Save a config. With `customize`, also add the saved file to the server's customizations
+ * (opt-in from the editor) so a pack update does not undo the edit. The save itself has
+ * already happened when that step fails, so its error comes back as `customizeError`.
+ * @param {string} serverId @param {string} relPath @param {string} content
+ * @param {{actor?: string, customize?: boolean}} [options]
+ */
+async function write(serverId, relPath, content, { actor, customize = false } = {}) {
   await existingConfig(serverId, relPath);
   const files = require('./files');
-  return files.writeText(serverId, String(relPath).replace(/\\/g, '/'), content, { actor });
+  const normalized = String(relPath).replace(/\\/g, '/');
+  const saved = await files.writeText(serverId, normalized, content, { actor });
+  if (!customize) return saved;
+  const state = (await customizationStates(serverId, [normalized])).get(normalized);
+  // Already customized: writeText's sync updated the copy. Other states cannot be added.
+  if (state !== 'available') return saved;
+  const out = await require('./customizations').add(serverId, [normalized], { actor });
+  if (!out.succeeded) {
+    logger.debug('Adding a saved config to customizations was refused.', { serverId });
+    const refused = /** @type {{ error?: string } | undefined} */ (out.results[0]);
+    return { ...saved, customizeError: refused?.error || 'The file could not be added to customizations.' };
+  }
+  return { ...saved, customized: true, needsRebuild: out.needsRebuild };
 }
 
 module.exports = { list, read, write, CONFIG_EXTENSIONS };

@@ -55,6 +55,8 @@ A pack update can overwrite the configs and scripts the pack ships. To keep your
 1. Open the server's **Files** tab.
 2. Use a row's overflow menu and choose **Add To Customizations** (or **Update Customization** if the file is already customized). To add several at once, select them and use **Add To Customizations** in the bar that appears. Adding a folder adds every file inside it.
 
+Or, from **Mods → Configs**: open a config, make your change, tick **Keep My Changes When the Pack Updates**, and save. Files in the world's `serverconfig` folder (where mods like FTB Chunks keep server settings) are not overwritten by pack updates, so the editor says so instead of offering this. The Configs list shows a **Customized** badge on files that have a copy, and its form view understands TOML, JSON, properties, and SNBT files.
+
 The panel keeps a copy of each file in a `customizations/` folder in the server's data folder, and copies that folder back over the server's files **every time the server starts**. Your version wins over the pack's, including after a pack upgrade. If the server was already running when you added a file, rebuild it to start applying the copy.
 
 - **The badge:** files with a copy show a **Customized** badge in the Files tab, and folders that contain one show **Has Customizations**.

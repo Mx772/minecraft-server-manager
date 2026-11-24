@@ -637,11 +637,20 @@ function ownedPaths(serverId) {
   );
 }
 
+/** Every path isOwnedPath would refuse, in one lookup (for listing many files at once). */
+function ownedOrProtectedPaths(serverId) {
+  const out = ownedPaths(serverId);
+  // Lazy require (cycle-breaker): chatBridge requires this module.
+  for (const rel of require('../integrations/chatBridge').protectedLivePaths(serverId)) out.add(rel);
+  return out;
+}
+
 module.exports = {
   writeOwned,
   removeOwned,
   readOwned,
   ownedPaths,
+  ownedOrProtectedPaths,
   OWNED_MSG,
   PROFILE_OWNED_MSG,
   PROFILE_OWNER_PREFIX,
