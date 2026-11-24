@@ -156,7 +156,7 @@ physically press on `:active`).
   colorways); `.chip`; `.notice` + `.notice-ok/-warn/-danger/-info` (the one inline callout — no
   ad-hoc border/background pairs). Shared view partials: `page-header`, `brand-lockup`,
   `empty-state`, `settings/card`, `settings/toggle-row`.
-- **One z-index scale**, listed in `input.css`: topbar 20 · sidebar backdrop 30 · sidebar 40 ·
+- **One z-index scale**, listed in `input.css`: topbar 20 · jump-to-top 22 · bulk action bar 25 · sidebar backdrop 30 · sidebar 40 ·
   modal 60 · toasts 65 · dropdowns 68 · tooltip 70. Anything new picks a slot there.
 - **Write Tailwind classes as full literals** — the v4 scanner only emits utilities it sees
   verbatim. No `bg-${color}-500` assembly (that's why `STATUS_DOT` in `web/app.js` is a literal map).

@@ -61,3 +61,41 @@ test('POST /viewed marks every unread report for the server as read', async () =
   assert.equal(r.json.marked, 1);
   assert.equal(unread(), 0);
 });
+
+const rowExists = (id) => Boolean(db.get('SELECT id FROM crash_reports WHERE id = ?', id));
+
+test('the Crashes tab drops reports whose file is gone and lists the rest', async () => {
+  seedCrash('cr_gone0001', 'crash-gone.txt', { withFile: false });
+  const r = await app.req('GET', `/servers/${SID}/crashes`, { cookie, headers: { Accept: 'text/html' } });
+  assert.equal(r.status, 200);
+  assert.equal(rowExists('cr_gone0001'), false);
+  assert.equal(rowExists('cr_missing1'), false);
+  assert.equal(rowExists('cr_present1'), true);
+  assert.match(r.text, /data-crash-id="cr_present1"/);
+  assert.doesNotMatch(r.text, /cr_gone0001/);
+});
+
+test('the History tab no longer renders crash cards', async () => {
+  const r = await app.req('GET', `/servers/${SID}/history`, { cookie, headers: { Accept: 'text/html' } });
+  assert.equal(r.status, 200);
+  assert.doesNotMatch(r.text, /data-crash-card/);
+});
+
+test('DELETE ?all=1 dismisses every report, deletes the files, and records one event', async () => {
+  const before = db.get(
+    "SELECT COUNT(*) AS n FROM events WHERE server_id = ? AND type = 'crash-report-deleted'",
+    SID
+  ).n;
+  const r = await app.req('DELETE', `/api/servers/${SID}/crashes?all=1`, { cookie });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.deleted, 2);
+  assert.equal(db.get('SELECT COUNT(*) AS n FROM crash_reports WHERE server_id = ?', SID).n, 0);
+  assert.equal(fs.existsSync(dataPath('servers', SID, 'crash-reports', 'crash-present.txt')), false);
+  const after = db.get("SELECT COUNT(*) AS n FROM events WHERE server_id = ? AND type = 'crash-report-deleted'", SID).n;
+  assert.equal(after - before, 1);
+});
+
+test('DELETE without all=1 or olderThanDays is still rejected', async () => {
+  const r = await app.req('DELETE', `/api/servers/${SID}/crashes`, { cookie });
+  assert.equal(r.status, 400);
+});

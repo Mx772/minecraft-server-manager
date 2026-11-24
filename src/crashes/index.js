@@ -219,6 +219,9 @@ async function scanServer(serverId) {
   };
   const last = lastDirMtimes.get(serverId);
   if (last && last.crash === dirMtimes.crash && last.root === dirMtimes.root) return inserted;
+  // The server folder itself missing is not proof the reports are gone (an
+  // unmounted volume, a move in progress), so only prune when it is there.
+  if (dirMtimes.root != null) await pruneMissing(serverId);
   for (const filename of await listCandidateFiles(serverId)) {
     if (db.get('SELECT id FROM crash_reports WHERE server_id = ? AND filename = ?', serverId, filename)) continue;
 
@@ -263,6 +266,28 @@ async function scanServer(serverId) {
   }
   lastDirMtimes.set(serverId, { crash: settledMtime(dirMtimes.crash), root: settledMtime(dirMtimes.root) });
   return inserted;
+}
+
+/**
+ * Drop index rows whose file has left the server folder (cleaned out by hand,
+ * a pack reinstall, or a server rebuild). Left in place they list a report
+ * nobody can open. Only a definite ENOENT prunes; any other error keeps the row.
+ */
+async function pruneMissing(serverId) {
+  const rows = db.all('SELECT id, filename FROM crash_reports WHERE server_id = ?', serverId);
+  let pruned = 0;
+  for (const row of rows) {
+    try {
+      await fsp.access(absPathFor(serverId, row.filename));
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        db.run('DELETE FROM crash_reports WHERE id = ?', row.id);
+        pruned++;
+      }
+    }
+  }
+  if (pruned) logger.info('Dropped crash reports whose files are gone.', { serverId, pruned });
+  return pruned;
 }
 
 /** Scan every (non-deleted) server; per-server errors are swallowed. */
@@ -438,6 +463,32 @@ function deleteCrash(crashId, { actor = 'system' } = {}) {
   return { freedBytes: row.size_bytes };
 }
 
+/** Dismiss every report for a server: one history event rather than one per report. */
+function deleteAll(serverId, { actor = 'system' } = {}) {
+  const rows = db.all('SELECT id, filename, size_bytes FROM crash_reports WHERE server_id = ?', serverId);
+  let freedBytes = 0;
+  for (const row of rows) {
+    try {
+      fs.unlinkSync(absPathFor(serverId, row.filename));
+    } catch {
+      /* file already gone - still drop the row */
+    }
+    freedBytes += row.size_bytes || 0;
+  }
+  db.run('DELETE FROM crash_reports WHERE server_id = ?', serverId);
+  if (rows.length) {
+    recordEvent({
+      serverId,
+      type: 'crash-report-deleted',
+      actor,
+      summary: `Deleted ${rows.length} crash ${rows.length === 1 ? 'report' : 'reports'}.`,
+      details: { deleted: rows.length, freedBytes },
+    });
+    logger.info('Deleted every crash report for a server.', { serverId, deleted: rows.length, actor });
+  }
+  return { deleted: rows.length, freedBytes };
+}
+
 /** Bulk cleanup: delete this server's reports older than `days`. */
 function deleteOlderThan(serverId, days, { actor = 'system' } = {}) {
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -463,4 +514,6 @@ module.exports = {
   crashInsights,
   deleteCrash,
   deleteOlderThan,
+  deleteAll,
+  pruneMissing,
 };
