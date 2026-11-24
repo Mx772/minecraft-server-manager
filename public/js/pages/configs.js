@@ -2,6 +2,7 @@ import { toast } from '../lib/toast.js';
 import { friendlyError } from '../lib/errors.js';
 import { openModal } from '../lib/modal.js';
 import { escapeHtml } from '../lib/format.js';
+import { parseConfig, serialize as serializeFields } from '../lib/configForm.js';
 
 const root = document.querySelector('[data-mod-configs]');
 root?.addEventListener('click', (event) => {
@@ -21,87 +22,13 @@ async function openConfig(filePath) {
     const data = await request(
       `/api/servers/${root.dataset.serverId}/configs/file?path=${encodeURIComponent(filePath)}`
     );
-    showEditor(data.path, data.content, data.descriptions || {});
+    showEditor(data.path, data.content, data.descriptions || {}, data.customization);
   } catch (error) {
     toast(error.message || friendlyError(error, { action: 'load this config' }), { kind: 'error' });
   }
 }
 
-function parseConfig(content, extension, descriptions = {}) {
-  if (['.json', '.jsonc'].includes(extension)) {
-    try {
-      const value = JSON.parse(content);
-      if (!value || typeof value !== 'object') return null;
-      const fields = [];
-      flatten(value, [], fields, descriptions);
-      return { kind: 'json', value, fields };
-    } catch {
-      return null;
-    }
-  }
-  if (['.toml', '.ini', '.cfg', '.conf', '.properties'].includes(extension)) {
-    const lines = content.split(/\r?\n/);
-    const fields = [];
-    let section = '';
-    let comments = [];
-    lines.forEach((line, index) => {
-      const sectionMatch = /^\s*\[([^\]]+)\]/.exec(line);
-      if (sectionMatch) {
-        section = sectionMatch[1];
-        comments = [];
-        return;
-      }
-      const comment = /^\s*[#;]\s?(.*)$/.exec(line);
-      if (comment) {
-        comments.push(comment[1].trim());
-        return;
-      }
-      if (!line.trim()) {
-        comments = [];
-        return;
-      }
-      const match = /^(\s*(?:[^#;\s][^=:#]*?)\s*[=:]\s*)(.*?)(\s*(?:#|;).*)?$/.exec(line);
-      if (match) {
-        const rawValue = match[2];
-        const value = /^(true|false)$/i.test(rawValue)
-          ? rawValue.toLowerCase() === 'true'
-          : /^[-+]?\d+(?:\.\d+)?$/.test(rawValue)
-            ? Number(rawValue)
-            : rawValue;
-        const rawKey = match[1].trim().replace(/[=:]\s*$/, '');
-        const parts = rawKey.split('.');
-        const group = section || (parts.length > 1 ? parts.slice(0, -1).join('.') : 'General');
-        const inlineDescription = (match[3] || '').replace(/^\s*[#;]\s?/, '').trim();
-        const description =
-          descriptions[rawKey] || descriptions[rawKey.toLowerCase()] || comments.join(' ') || inlineDescription;
-        fields.push({
-          index,
-          prefix: match[1],
-          value,
-          suffix: match[3] || '',
-          group,
-          key: parts.at(-1),
-          description,
-        });
-      }
-      comments = [];
-    });
-    if (fields.length) return { kind: 'lines', lines, fields };
-  }
-  return null;
-}
-
-function flatten(value, path, fields, descriptions = {}) {
-  if (Array.isArray(value)) return;
-  if (value && typeof value === 'object') {
-    for (const [key, child] of Object.entries(value)) flatten(child, [...path, key], fields, descriptions);
-  } else {
-    const dottedPath = path.join('.');
-    fields.push({ path, value, description: descriptions[dottedPath] || descriptions[path.at(-1)] || '' });
-  }
-}
-
-function showEditor(filePath, original, descriptions) {
+function showEditor(filePath, original, descriptions, customization) {
   const extension = `.${filePath.split('.').pop().toLowerCase()}`;
   let parsed = parseConfig(original, extension, descriptions);
   const dialog = document.createElement('div');
@@ -115,6 +42,7 @@ function showEditor(filePath, original, descriptions) {
     </div>
     <div class="grid gap-2" data-editor-form>${parsed ? renderFields(parsed) : '<p class="help">This format could not be safely rendered as fields. Use raw view to edit the file.</p>'}</div>
     <textarea class="input hidden min-h-80 w-full resize-y font-mono text-xs" data-editor-raw spellcheck="false"></textarea>
+    ${customizationNotice(customization)}
     <p class="help mt-3">Some settings only take effect after the server restarts.</p>`;
   const raw = dialog.querySelector('[data-editor-raw]');
   const form = dialog.querySelector('[data-editor-form]');
@@ -159,12 +87,13 @@ function showEditor(filePath, original, descriptions) {
         onClick: async () => {
           try {
             const content = mode === 'raw' ? raw.value : serialize(parsed, dialog);
-            await request(`/api/servers/${root.dataset.serverId}/configs/file`, {
+            const customize = Boolean(dialog.querySelector('[data-customize]')?.checked);
+            const saved = await request(`/api/servers/${root.dataset.serverId}/configs/file`, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path: filePath, content }),
+              body: JSON.stringify({ path: filePath, content, ...(customize ? { customize } : {}) }),
             });
-            toast('Config saved.');
+            afterSave(filePath, saved);
           } catch (error) {
             toast(error.message || friendlyError(error, { action: 'save this config' }), { kind: 'error' });
             return false;
@@ -177,33 +106,80 @@ function showEditor(filePath, original, descriptions) {
 
 function serialize(parsed, dialog) {
   if (!parsed) return dialog.querySelector('[data-editor-raw]').value;
-  if (parsed.kind === 'json') {
-    const result = structuredClone(parsed.value);
-    parsed.fields.forEach((field, index) => {
-      const input = dialog.querySelector(`[data-field="${index}"]`);
-      let value = input.type === 'checkbox' ? input.checked : input.value;
-      if (input.dataset.type === 'number') value = Number(value);
-      if (input.dataset.type === 'boolean') value = value === 'true';
-      let target = result;
-      for (const key of field.path.slice(0, -1)) target = target[key];
-      target[field.path.at(-1)] = value;
-    });
-    return `${JSON.stringify(result, null, 2)}\n`;
-  }
-  const lines = [...parsed.lines];
-  parsed.fields.forEach((field, index) => {
+  const values = parsed.fields.map((_, index) => {
     const input = dialog.querySelector(`[data-field="${index}"]`);
-    const value = input.type === 'checkbox' ? String(input.checked) : input.value;
-    lines[field.index] = `${field.prefix}${value}${field.suffix}`;
+    return input.type === 'checkbox' ? input.checked : input.value;
   });
-  return lines.join('\n');
+  return serializeFields(parsed, values);
 }
+
+const CUSTOMIZATION_NOTICES = {
+  customized: [
+    'ok',
+    'This file is in your customizations. Saving here updates your copy too, so pack updates keep your changes.',
+  ],
+  world: ['info', 'This file is saved with the world, so pack updates do not overwrite it.'],
+  managed: [
+    'warn',
+    'A panel feature manages this file (Recommended Setup or the Discord chat bridge). The next start replaces edits made here, so change it there instead.',
+  ],
+};
+
+function customizationNotice(state) {
+  if (state === 'available') {
+    return `
+    <label class="mt-4 flex items-start gap-3 rounded-sm border border-line bg-inset p-3">
+      <input class="msm-check mt-0.5 shrink-0" type="checkbox" data-customize>
+      <span class="min-w-0">
+        <span class="block text-sm font-medium text-ink">Keep My Changes When the Pack Updates</span>
+        <span class="mt-0.5 block text-xs leading-relaxed text-ink-faint">A pack update can overwrite this file. This saves a copy to your customizations on Pack Setup, which is put back over the pack's version every time the server starts.</span>
+      </span>
+    </label>`;
+  }
+  const notice = CUSTOMIZATION_NOTICES[state];
+  if (!notice) return '';
+  const [kind, text] = notice;
+  return `<div class="notice notice-${kind} mt-4"><p>${escapeHtml(text)}</p></div>`;
+}
+
+function afterSave(filePath, saved) {
+  if (saved.customized) {
+    toast('Config saved and added to your customizations.');
+    markCustomized(filePath);
+    if (saved.needsRebuild) {
+      toast('Rebuild the server to start applying your customizations.', { kind: 'warn', timeout: 9000 });
+    }
+  } else if (saved.customizeError) {
+    toast(`Config saved, but it could not be added to your customizations. ${saved.customizeError}`, {
+      kind: 'warn',
+      timeout: 9000,
+    });
+  } else if (saved.customizationUpdated) {
+    toast('Config saved. Your customization was updated too.');
+  } else {
+    toast('Config saved.');
+  }
+}
+
+/** Show the Customized badge on a file the editor just added, without a reload. */
+function markCustomized(filePath) {
+  root.querySelectorAll('[data-open-mod-config]').forEach((button) => {
+    if (button.dataset.path !== filePath || button.parentElement.querySelector('[data-customized-badge]')) return;
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-info shrink-0';
+    badge.dataset.customizedBadge = '';
+    badge.dataset.tip = CUSTOMIZED_TIP;
+    badge.textContent = 'Customized';
+    button.after(badge);
+  });
+}
+
+const CUSTOMIZED_TIP = "The panel copies your version over the pack's file every time the server starts.";
 
 function renderFields(parsed) {
   const groups = new Map();
   parsed.fields.forEach((field, index) => {
-    const group =
-      parsed.kind === 'json' ? (field.path.length > 1 ? field.path.slice(0, -1).join(' › ') : 'General') : field.group;
+    const group = field.group;
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push({ field, index });
   });
@@ -219,15 +195,11 @@ function renderFields(parsed) {
       <div class="border-t border-line px-3 pb-2">
         ${fields
           .map(({ field, index }) => {
-            const key = parsed.kind === 'json' ? field.path.at(-1) : field.key;
-            const value = field.value;
+            const key = field.key;
             const description = field.description
-              ? `<p id="config-description-${index}" class="mt-0.5 max-w-prose text-xs leading-relaxed text-ink-faint">${escapeHtml(field.description)}</p>`
+              ? `<p id="config-description-${index}" class="mt-0.5 max-w-prose whitespace-pre-line text-xs leading-relaxed text-ink-faint">${escapeHtml(field.description)}</p>`
               : '';
-            const control =
-              typeof value === 'boolean'
-                ? `<input id="config-field-${index}" class="msm-check shrink-0" type="checkbox" data-field="${index}" ${value ? 'checked' : ''}>`
-                : `<input id="config-field-${index}" class="input h-8 w-36 min-w-0 px-2 py-1 text-xs sm:w-40" data-field="${index}" data-type="${typeof value}" ${typeof value === 'number' ? 'type="number" step="any"' : ''} value="${escapeHtml(value)}">`;
+            const control = fieldControl(field, index);
             const describedBy = field.description ? `aria-describedby="config-description-${index}"` : '';
             return `<div class="flex min-w-0 items-center gap-4 border-b border-line py-2"><div class="min-w-0 flex-1"><label class="block truncate text-sm font-medium text-ink" for="config-field-${index}" title="${escapeHtml(key)}">${escapeHtml(key)}</label>${description}</div>${control.replace('data-field=', `${describedBy} data-field=`)}</div>`;
           })
@@ -237,4 +209,23 @@ function renderFields(parsed) {
       )
       .join('') || '<p class="help">No editable settings were found in this file.</p>'
   );
+}
+
+function fieldControl(field, index) {
+  const value = field.value;
+  if (field.type === 'boolean') {
+    return `<input id="config-field-${index}" class="msm-check shrink-0" type="checkbox" data-field="${index}" ${value ? 'checked' : ''}>`;
+  }
+  if (field.options) {
+    const options = field.options.includes(value) ? field.options : [value, ...field.options];
+    return `<select id="config-field-${index}" class="input h-8 w-36 min-w-0 px-2 py-1 text-xs sm:w-40" data-field="${index}">${options
+      .map(
+        (option) =>
+          `<option value="${escapeHtml(option)}" ${option === value ? 'selected' : ''}>${escapeHtml(option)}</option>`
+      )
+      .join('')}</select>`;
+  }
+  const numeric = field.type === 'number' ? 'type="number" step="any"' : '';
+  const mono = field.type === 'raw' ? ' font-mono' : '';
+  return `<input id="config-field-${index}" class="input h-8 w-36 min-w-0 px-2 py-1 text-xs sm:w-40${mono}" data-field="${index}" ${numeric} value="${escapeHtml(value)}">`;
 }

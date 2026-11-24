@@ -19,7 +19,10 @@
             {{#if files.length}}
               <ul class="mt-2 space-y-1 border-t border-line pt-2">
                 {{#each files}}
-                  <li><button class="w-full truncate rounded px-1.5 py-1 text-left font-mono text-xs text-link hover:bg-hover" type="button" data-open-mod-config data-path="{{path}}" title="{{path}}">{{path}}</button></li>
+                  <li class="flex min-w-0 items-center gap-1.5">
+                    <button class="min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left font-mono text-xs text-link hover:bg-hover" type="button" data-open-mod-config data-path="{{path}}" title="{{path}}">{{path}}</button>
+                    {{#if customized}}<span class="badge badge-info shrink-0" data-customized-badge data-tip="The panel copies your version over the pack's file every time the server starts.">Customized</span>{{/if}}
+                  </li>
                 {{/each}}
               </ul>
             {{else}}
@@ -40,9 +43,12 @@
         </div>
         <div class="card divide-y divide-line">
           {{#each unassignedConfigs}}
-            <button class="btn btn-ghost w-full justify-start rounded-none px-4 py-3 text-left" type="button" data-open-mod-config data-path="{{path}}">
-              <span class="min-w-0 truncate">{{path}}</span>
-            </button>
+            <div class="flex min-w-0 items-center gap-2 pr-3">
+              <button class="btn btn-ghost min-w-0 flex-1 justify-start rounded-none px-4 py-3 text-left" type="button" data-open-mod-config data-path="{{path}}">
+                <span class="min-w-0 truncate">{{path}}</span>
+              </button>
+              {{#if customized}}<span class="badge badge-info shrink-0" data-customized-badge data-tip="The panel copies your version over the pack's file every time the server starts.">Customized</span>{{/if}}
+            </div>
           {{/each}}
         </div>
       </section>
