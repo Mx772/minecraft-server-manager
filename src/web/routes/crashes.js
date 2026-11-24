@@ -76,11 +76,15 @@ router.post(
   })
 );
 
-// Bulk delete - everything older than ?olderThanDays=N for this server.
+// Bulk delete - everything older than ?olderThanDays=N for this server, or
+// every report with ?all=1 (the Dismiss All button).
 router.delete(
   '/',
   asyncHandler((req, res, next) => {
     const serverId = serverIdSchema.parse(req.params.id);
+    if (req.query.all === '1') {
+      return res.json({ ok: true, ...crashes.deleteAll(serverId, { actor: req.user.username }) });
+    }
     const days = z.coerce.number().int().min(1).max(3650).parse(req.query.olderThanDays);
     const result = crashes.deleteOlderThan(serverId, days, { actor: req.user.username });
     res.json({ ok: true, ...result });

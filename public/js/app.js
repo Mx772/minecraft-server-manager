@@ -22,6 +22,30 @@ window.CD = { toast, openModal, confirmDialog, setBusy, withBusy };
 // ---- Custom selects everywhere ----
 enhanceAll();
 
+// ---- Jump to top: shown once the page is scrolled down a way. ----
+const backToTop = document.getElementById('back-to-top');
+if (backToTop) {
+  let ticking = false;
+  const sync = () => {
+    backToTop.hidden = window.scrollY < 400;
+    ticking = false;
+  };
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(sync);
+    },
+    { passive: true }
+  );
+  backToTop.addEventListener('click', () => {
+    const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
+  });
+  sync();
+}
+
 // ---- Icon fallback: replaces per-image inline onerror="" attributes (which
 // script-src's CSP nonce doesn't cover) with one delegated listener. `error`
 // doesn't bubble, so this has to listen on the capture phase. ----

@@ -1,6 +1,6 @@
-// History tab: crash-report cards (viewer modal, copy trace, download) wired
-// via data attributes rendered by history.hbs, plus client-side event filtering
-// and captured-log excerpt viewing.
+// History and Crashes tabs: crash-report cards (viewer modal, copy trace,
+// download, dismiss) wired via data attributes rendered by crashes.hbs, plus
+// client-side event filtering and captured-log excerpt viewing (history.hbs).
 
 import { openModal } from '../lib/modal.js';
 import { toast } from '../lib/toast.js';
@@ -24,6 +24,7 @@ function init(serverId) {
         else if (action === 'download') withBusy(btn, () => download(serverId, crash));
         else if (action === 'share') withBusy(btn, () => shareToMclogs(serverId, crash, card));
         else if (action === 'insights') withBusy(btn, () => showInsights(serverId, crash, card));
+        else if (action === 'dismiss') withBusy(btn, () => dismiss(serverId, crash, card));
       });
     });
   }
@@ -37,6 +38,28 @@ function init(serverId) {
         document.querySelectorAll('[data-crash-card]').forEach(dropNewBadge);
         markAll.remove();
         toast('Crash reports marked as read.');
+      } catch (err) {
+        toast(err.message, { kind: 'error' });
+      }
+    })
+  );
+
+  const dismissAll = document.querySelector('[data-crash-dismiss-all]');
+  dismissAll?.addEventListener('click', () =>
+    withBusy(dismissAll, async () => {
+      const ok = await confirmDialog({
+        title: 'Dismiss every crash report?',
+        message:
+          'Every crash report file listed here is deleted from the server folder. Download any you want to keep first.',
+        confirmLabel: 'Dismiss All',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        const res = await fetch(`/api/servers/${serverId}/crashes?all=1`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(friendlyError(res, { action: 'dismiss the crash reports' }));
+        // Re-render: the empty state and the nav badge both come from the server.
+        location.reload();
       } catch (err) {
         toast(err.message, { kind: 'error' });
       }
@@ -129,6 +152,24 @@ async function fetchText(serverId, crash) {
     throw err;
   }
   return res.text();
+}
+
+async function dismiss(serverId, crash, card) {
+  try {
+    const res = await fetch(`/api/servers/${serverId}/crashes/${crash.id}`, { method: 'DELETE' });
+    // 404: already gone (another tab, or the file was cleaned out), which is what dismissing wants.
+    if (!res.ok && res.status !== 404) throw new Error(friendlyError(res, { action: 'dismiss that crash report' }));
+    removeCard(card);
+    toast('Crash report dismissed.');
+  } catch (err) {
+    toast(err.message, { kind: 'error' });
+  }
+}
+
+/** Drop a crash card; once none are left, re-render for the empty state. */
+function removeCard(card) {
+  card?.remove();
+  if (!document.querySelector('[data-crash-card]')) location.reload();
 }
 
 /** Remove a crash card's "new" badge once the server has marked it read. */
@@ -298,9 +339,9 @@ async function openViewer(serverId, crash, card) {
   try {
     text = await fetchText(serverId, crash);
   } catch (err) {
-    // A 404 means the file is gone, but the server still marked the report read.
-    if (err.status === 404) dropNewBadge(card);
     toast(err.message, { kind: 'error' });
+    // A 404 means the file is gone; the next scan drops the report, so drop its card now.
+    if (err.status === 404) removeCard(card);
     return;
   }
 

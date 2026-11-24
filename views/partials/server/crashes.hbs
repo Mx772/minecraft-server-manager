@@ -1,0 +1,50 @@
+<div data-history-server="{{server.id}}" class="contents">
+{{#if crashReports.length}}
+  <div class="card mb-4 border-danger/40">
+    <div class="flex flex-wrap items-center gap-2 border-b border-line p-3">
+      <span class="font-semibold text-danger">{{{icon 'flame' 'size-4'}}} Crash Reports</span>
+      {{#if perms.files}}
+        <div class="ml-auto flex flex-wrap gap-2">
+          {{#if server.crashesUnread}}
+            <button class="btn btn-ghost btn-sm" data-crash-mark-all>{{{icon 'check-check' 'size-3.5'}}} Mark All Read</button>
+          {{/if}}
+          <button class="btn btn-ghost btn-sm" data-crash-dismiss-all data-tip="Deletes every crash report file listed here from the server folder.">{{{icon 'trash-2' 'size-3.5'}}} Dismiss All</button>
+        </div>
+      {{/if}}
+    </div>
+    <div class="divide-y divide-line">
+      {{#each crashReports}}
+        <div class="p-3" data-crash-card data-crash-id="{{id}}" data-crash-file="{{file}}" {{#if mclogsUrl}}data-crash-mclogs="{{mclogsUrl}}"{{/if}}>
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            {{#unless viewed}}<span class="badge badge-danger">new</span>{{/unless}}
+            <span class="font-mono text-xs text-ink-faint">{{file}}</span>
+            <span class="ml-auto text-xs tabular-nums text-ink-faint"><span data-ts="{{ts}}">{{ts}}</span> · {{bytes size}}</span>
+          </div>
+          <p class="mt-1.5 font-mono text-xs text-ink-soft">{{summary}}</p>
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            {{#each suspected}}
+              <span class="badge badge-warn" title="Suspected from the stack trace.">suspect: {{this}}</span>
+            {{/each}}
+            {{! One treatment (icon + label) for all three sibling actions. }}
+            <button class="btn btn-ghost btn-sm" data-crash-action="view">{{{icon 'file-search' 'size-3.5'}}} Open Viewer</button>
+            <button class="btn btn-ghost btn-sm" data-crash-action="copy">{{{icon 'clipboard-copy' 'size-3.5'}}} Copy Stack Trace</button>
+            <button class="btn btn-ghost btn-sm" data-crash-action="download">{{{icon 'download' 'size-3.5'}}} Download</button>
+            <button class="btn btn-ghost btn-sm" data-crash-action="insights" data-tip="Automated analysis by mclo.gs: known problems with suggested fixes. Publishes the report as a public paste first.">{{{icon 'sparkles' 'size-3.5'}}} Analyze</button>
+            {{#if mclogsUrl}}
+              <a class="btn btn-ghost btn-sm" data-role="mclogs-link" href="{{mclogsUrl}}" target="_blank" rel="noopener">{{{icon 'external-link' 'size-3.5'}}} mclo.gs Paste</a>
+            {{else}}
+              <button class="btn btn-ghost btn-sm" data-crash-action="share" data-tip="Publish this report as a public mclo.gs paste, a link anyone can open (mod authors usually ask for one).">{{{icon 'share-2' 'size-3.5'}}} Share to mclo.gs</button>
+            {{/if}}
+            {{#if @root.perms.files}}
+              <button class="btn btn-ghost btn-sm sm:ml-auto" data-crash-action="dismiss" data-tip="Delete this report and its file from the server folder.">{{{icon 'x' 'size-3.5'}}} Dismiss</button>
+            {{/if}}
+          </div>
+        </div>
+      {{/each}}
+    </div>
+  </div>
+{{else}}
+  {{> empty-state iconName='flame' title='No Crash Reports' message='When this server crashes, its crash report shows up here with a summary, the suspected mods, and a viewer.'}}
+{{/if}}
+</div>
+<script type="module" src="/js/pages/history.js"></script>

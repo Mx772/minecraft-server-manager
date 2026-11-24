@@ -58,6 +58,7 @@ const SERVER_TABS = [
   'backups',
   'history',
   'metrics',
+  'crashes',
   'settings',
   'discord',
   'status-page',
@@ -78,7 +79,7 @@ const TAB_GROUPS = [
   { key: 'mods', label: 'Mods', icon: 'puzzle', tabs: ['mods', 'pack-setup', 'configs', 'updates'] },
   { key: 'world', label: 'World', icon: 'earth', tabs: ['worlds', 'map', 'files'] },
   { key: 'backups', label: 'Backups', icon: 'archive', tabs: ['backups'] },
-  { key: 'monitoring', label: 'Monitoring', icon: 'activity', tabs: ['history', 'metrics'] },
+  { key: 'monitoring', label: 'Monitoring', icon: 'activity', tabs: ['history', 'metrics', 'crashes'] },
   {
     key: 'settings',
     label: 'Settings',
@@ -102,6 +103,7 @@ const SUB_LABELS = {
   files: 'Files',
   metrics: 'Live',
   history: 'History',
+  crashes: 'Crashes',
   settings: 'Configuration',
   discord: 'Discord',
   'status-page': 'Status Page',
@@ -130,7 +132,7 @@ function buildNav(id, tab, server, { isAdmin = false, perms = null, modServer = 
     icon: g.icon,
     href: `/servers/${id}/${g.tabs[0]}`,
     active: g.key === group.key,
-    badge: g.tabs.includes('history') && crashes ? crashes : null,
+    badge: g.tabs.includes('crashes') && crashes ? crashes : null,
   }));
   const visibleSubTabs = group.tabs.filter(
     (t) =>
@@ -144,7 +146,7 @@ function buildNav(id, tab, server, { isAdmin = false, perms = null, modServer = 
           label: SUB_LABELS[t] || t,
           href: `/servers/${id}/${t}`,
           active: t === tab,
-          badge: t === 'history' && crashes ? crashes : null,
+          badge: t === 'crashes' && crashes ? crashes : null,
         }))
       : null;
   return { groups, sub };
@@ -482,6 +484,18 @@ router.get(
     const tab = req.params.tab || 'overview';
     if (!SERVER_TABS.includes(tab)) return next();
 
+    if (tab === 'crashes') {
+      // Rescan before the view model counts unread reports: picks up a fresh
+      // crash and drops reports whose file is gone, so every card can be opened.
+      await require('../../crashes')
+        .scanServer(row.id)
+        .catch((err) => {
+          logger.debug('A crash rescan before the Crashes tab failed.', {
+            serverId: row.id,
+            err: serializeError(err, { includeStack: false }),
+          });
+        });
+    }
     const server = await serverVM(row);
     // Docker settings (container name, network, extra ports/binds - including
     // host filesystem paths) are added ONLY here, never in serverVM, since
@@ -841,6 +855,7 @@ router.get(
       context.wsConsole = true;
     } else if (tab === 'history') {
       context.events = eventsVM(eventsService.listEvents({ serverId: row.id, limit: 100, forUser: req.user }));
+    } else if (tab === 'crashes') {
       context.crashReports = db
         .all('SELECT * FROM crash_reports WHERE server_id = ? ORDER BY file_mtime DESC LIMIT 50', row.id)
         .map(crashVM);
