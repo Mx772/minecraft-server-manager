@@ -9,16 +9,16 @@
         <tr data-automation-row data-automation-id="{{id}}" data-automation-name="{{name}}" data-automation-trigger="{{trigger}}" data-def="{{jsonAttr def}}">
           <td data-th="Name" class="font-medium">{{name}}{{#if ../compact}}{{#if runsAll}} <span class="chip ml-1">All Servers</span>{{/if}}{{/if}}</td>
           {{#unless ../compact}}<td data-th="Runs On" class="text-ink-soft">{{runsOn}}</td>{{/unless}}
-          <td data-th="Schedule" class="whitespace-nowrap">
+          <td data-th="Schedule" class="sm:whitespace-nowrap">
             {{#if isEvent}}<span class="text-xs text-ink-soft">{{trigger}}</span>{{else}}<span class="font-mono text-xs text-ink-faint">{{cron}}</span>{{/if}}
             <span class="block text-xs tabular-nums text-ink-faint">{{#if isEvent}}On event{{else if nextMs}}Next: <span data-ts="{{nextMs}}">{{next}}</span>{{else}}Not scheduled{{/if}}</span>
           </td>
           {{#if ../compact}}
-            <td data-th="Steps" class="whitespace-nowrap text-ink-soft"><span data-tip="{{summary}}">{{stepCount}}</span></td>
+            <td data-th="Steps" class="text-ink-soft sm:whitespace-nowrap"><span data-tip="{{summary}}">{{stepCount}}</span></td>
           {{else}}
             <td data-th="Steps" class="min-w-40 text-ink-soft">{{summary}}</td>
           {{/if}}
-          <td data-th="Last Result" class="whitespace-nowrap">
+          <td data-th="Last Result" class="sm:whitespace-nowrap">
             <button type="button" class="btn btn-ghost btn-sm" data-automation-runs data-tip="See the recent runs.">
               {{#if lastOk}}<span class="badge badge-ok">OK</span>{{/if}}
               {{#if lastPartial}}<span class="badge badge-warn">Partial</span>{{/if}}
@@ -26,7 +26,7 @@
               {{#unless lastStatus}}<span class="text-ink-faint">Never Run</span>{{/unless}}
             </button>
           </td>
-          <td data-th="Enabled" class="whitespace-nowrap text-right">
+          <td data-th="Enabled" class="text-right sm:whitespace-nowrap">
             <div class="flex flex-wrap items-center gap-1 sm:inline-flex sm:flex-nowrap">
               <label class="msm-toggle mr-1"><input type="checkbox" data-automation-toggle aria-label="Enabled" {{#if enabled}}checked{{/if}} {{#unless canEdit}}disabled{{/unless}}><span></span></label>
               <a class="btn btn-ghost btn-sm" href="/api/automations/{{id}}/export" download data-tip="Export this automation as a template file." aria-label="Export {{name}}">{{{icon 'download' 'size-3.5'}}}</a>

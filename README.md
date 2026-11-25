@@ -261,7 +261,7 @@ pm2 save
     <td><img src="docs/screenshots/11-chat-commands.png" alt="Custom chat commands"><br><sub><b>Custom chat commands</b>: owner-defined <code>!triggers</code> (RTP, warp, console) with cooldowns &amp; permissions.</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/14-schedules.png" alt="Automation"><br><sub><b>Automation</b>: cron automations with timed steps (warn, restart, back up, run commands) and next-run previews.</sub></td>
+    <td><img src="docs/screenshots/14-automations.png" alt="Automation"><br><sub><b>Automation</b>: cron automations with timed steps (warn, restart, back up, run commands) and next-run previews.</sub></td>
     <td><img src="docs/screenshots/15-storage.png" alt="Storage analytics"><br><sub><b>Storage analytics</b>: per-server usage, largest files, orphan detection, and panel-enforced quotas.</sub></td>
   </tr>
   <tr>

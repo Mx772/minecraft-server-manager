@@ -2,6 +2,8 @@
 
 [← Back to docs index](README.md)
 
+![Automation](images/automations.png)
+
 The **Automation** page runs things for you on a schedule. An automation is a cron schedule plus an ordered list of **steps**, and each step happens at its own time relative to the schedule. No external cron, no scripts.
 
 It replaces the old Schedules page. Every schedule you had carried over automatically as an automation with one step, and keeps its timing, its on/off state, and its last run.
