@@ -186,12 +186,12 @@ test('the capability catalog names every gated route (the Permissions page canno
       gated.push({ cap: m[5], entry: `${m[3] === 'requireCapForWrites' ? 'WRITES' : 'ALL'} /api${m[2]}/*` });
     }
   }
-  // Server-scoped schedule task types: the parenthetical on each
-  // `POST /api/schedules (…)` reach line must list exactly the task types whose
-  // `capability` in services/scheduler.js is that capability.
-  const { TASK_TYPES } = require('../src/services/scheduler');
+  // Server-scoped automation actions: the parenthetical on each
+  // `POST /api/automations (…)` reach line must list exactly the actions whose
+  // `capability` in automations/actions.js is that capability.
+  const { ACTIONS } = require('../src/automations');
   for (const cap of Object.keys(CAPABILITY_INFO)) {
-    const line = CAPABILITY_INFO[cap].reach.find((r) => r.startsWith('POST /api/schedules'));
+    const line = CAPABILITY_INFO[cap].reach.find((r) => r.startsWith('POST /api/automations'));
     const listed = line
       ? line
           .replace(/^.*\((.*)\)$/, '$1')
@@ -199,11 +199,11 @@ test('the capability catalog names every gated route (the Permissions page canno
           .map((s) => s.trim())
           .sort()
       : [];
-    const actual = Object.entries(TASK_TYPES)
-      .filter(([, t]) => t.serverScoped && t.capability === cap)
+    const actual = Object.entries(ACTIONS)
+      .filter(([, t]) => t.scope === 'server' && t.capability === cap)
       .map(([k]) => k)
       .sort();
-    assert.deepEqual(listed, actual, `schedule task types listed for ${cap}`);
+    assert.deepEqual(listed, actual, `automation actions listed for ${cap}`);
   }
   assert.ok(gated.length >= 50, `found ${gated.length} gated routes`);
   const missing = [];
@@ -267,6 +267,7 @@ test('every route that names its server in the body is either under /servers/:id
       // A write outside /servers/:id that reads a server id from the body.
       const full = {
         'api.js': '/api',
+        'automations.js': '/api/automations',
         'worlds.js': '/api/worlds',
         'blueprints.js': '/api/blueprints',
         'inventory.js': '/api/inventory',

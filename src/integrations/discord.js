@@ -61,6 +61,7 @@ const EVENT_MAP = {
   'startup-stalled': ['alert', 'alerts'],
   'stop-failed': ['alert', 'alerts'],
   'schedule-failed': ['alert', 'alerts'],
+  'automation-failed': ['alert', 'alerts'],
   'quota-exceeded': ['alert', 'alerts'],
   'offline-after-restart': ['alert', 'alerts'],
   // A port change that could not even put the server back, and a crash restart
@@ -154,6 +155,12 @@ async function testWebhook(serverId) {
   );
   if (!res.ok) throw httpError(502, 'Discord rejected the request. Check that the webhook URL is correct.');
   return { ok: true };
+}
+
+/** Whether this server has an enabled Discord webhook to post to. */
+function isConfigured(serverId) {
+  const r = row(serverId);
+  return Boolean(r && r.enabled && r.config_cipher && webhookUrl(serverId));
 }
 
 /**
@@ -383,6 +390,7 @@ function titleFor(type) {
     'startup-stalled': 'Startup stalled',
     'stop-failed': 'Stop failed',
     'schedule-failed': 'Scheduled task failed',
+    'automation-failed': 'Automation failed',
     'quota-exceeded': 'Disk quota exceeded',
     'offline-after-restart': 'Offline after panel restart',
     'port-change-failed': 'Port change left the server down',
@@ -396,6 +404,7 @@ module.exports = {
   getConfig,
   setConfig,
   testWebhook,
+  isConfigured,
   notify,
   startEventBridge,
   stopEventBridge,

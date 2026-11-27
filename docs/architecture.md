@@ -104,7 +104,7 @@ Cross-cutting:
   `/api/servers/:id` route, sub-router mount, page, WebSocket, and fleet-wide listing goes through
   `src/web/middleware/serverAccess.js` (`serverScope`, mounted on the `/servers/:id` prefix of both
   the API and the page router, hides a server without `view` as a 404; `requireCap(cap)` names the
-  capability a route needs). Writes that name their server in the body (schedules, world extract and
+  capability a route needs). Writes that name their server in the body (automations, world extract and
   install, blueprint export) are opened for viewers by `requireWrite` only for that server, and each
   such route checks the capability itself. `test/permissions-routes.test.js` walks the live router
   stacks and fails if a server-scoped write route, mount, or page has no gate.
@@ -171,13 +171,13 @@ Cross-cutting:
   (The `port_*_pending` columns from migration 029 belong to an earlier, unreleased design and are
   unused; 031 clears them.) A lock collision answers 409 with `code: 'BUSY'`, which the retrying
   callers below check rather than the wording. A crash auto-restart
-  (`watcher.restartAfterCrash`) and a scheduled backup or start (`scheduler.runTaskWithRetry`)
+  (`watcher.restartAfterCrash`) and a scheduled backup or start (`automations/engine.js`, `runWithRetry`)
   that find the server busy with another action try again every 20 s / 60 s for up to 30 minutes,
   and a pack update or rollback retries its locked steps the same way (`opLock.retryWhileBusy`);
   a crash restart or a waiting scheduled start gives up once someone has stopped, killed or
   started the server since (`events.lifecycleActionSince`), and the crash restart also when
-  auto-restart is off or the server is gone. Scheduled restarts, stops, and commands are not
-  retried, and a schedule whose last run is still waiting skips its next firing.
+  auto-restart is off or the server is gone. Automation restarts, stops, and commands are not
+  retried, and an automation whose last run is still going skips its next firing.
 - **Disk quotas** are enforced by the panel because Docker can't cap bind-mount usage: the indexer
   caches per-directory sizes and disk-growing operations are gated on them.
 - **Secrets** (RCON passwords, API keys, TOTP secrets, the Discord webhook URL) are encrypted at
@@ -235,7 +235,7 @@ Cross-cutting:
 7. Start the HTTP + WS server. On an exposed bind, print the first-run `/setup` PIN.
 8. Install the post-boot runtime guard (catches uncaught faults; `MSM_EXIT_ON_FATAL=1` makes it
    hard-exit for supervised deployments).
-9. Start background services: WS broker, storage indexer, crash + inventory watchers, scheduler,
+9. Start background services: WS broker, storage indexer, crash + inventory watchers, automations,
    Discord event bridge, chatbot outreach watcher, and the **daily maintenance timer** (prune old
    analytics rows, chatbot transcripts, event history (365 days) and API cache rows, then snapshot
    `panel.db`).

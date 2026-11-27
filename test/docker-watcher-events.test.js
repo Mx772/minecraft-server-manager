@@ -367,3 +367,42 @@ test("a die event closes the server's open player sessions", async () => {
   const row = db.get('SELECT ended_at FROM player_sessions WHERE server_id = ?', id);
   assert.equal(row.ended_at, '2026-01-01T00:05:00.000Z');
 });
+
+test('automation hooks: after-start fires when a boot turns healthy, not on recovery from unhealthy or a repeat', async (t) => {
+  const hooks = require('../src/automations/hooks');
+  const emit = t.mock.method(hooks, 'emit', async () => {});
+  const healthy = (id) => ({ status: 'health_status: healthy', Actor: { Attributes: { [LABEL]: id } } });
+
+  const booting = seed({ status: 'stopped' });
+  await watcher.handleEvent(evt(booting, 'start'));
+  await watcher.handleEvent(healthy(booting));
+  assert.deepEqual(
+    emit.mock.calls.map((c) => c.arguments),
+    [['after-start', booting]]
+  );
+  await watcher.handleEvent(healthy(booting)); // a repeat on a running server
+  assert.equal(emit.mock.callCount(), 1);
+
+  const recovering = seed({ status: 'unhealthy' });
+  await watcher.handleEvent(healthy(recovering));
+  assert.equal(emit.mock.callCount(), 1, 'unhealthy back to healthy is a recovery, not a start');
+  assert.equal(status(recovering), 'running');
+
+  const stalled = seed({ status: 'stalled' });
+  await watcher.handleEvent(healthy(stalled));
+  assert.equal(emit.mock.callCount(), 2, 'a slow boot that finally comes up is still a start');
+});
+
+test('automation hooks: on-crash fires once per crash and not for a clean exit or a crash-loop notice', async (t) => {
+  const hooks = require('../src/automations/hooks');
+  const emit = t.mock.method(hooks, 'emit', async () => {});
+  const clean = seed();
+  await watcher.handleEvent(evt(clean, 'die', { exitCode: '0' }));
+  assert.equal(emit.mock.callCount(), 0);
+  const id = seed({ autoRestart: 0 });
+  await watcher.handleEvent(evt(id, 'die', { exitCode: '1' }));
+  assert.deepEqual(
+    emit.mock.calls.map((c) => c.arguments),
+    [['on-crash', id]]
+  );
+});

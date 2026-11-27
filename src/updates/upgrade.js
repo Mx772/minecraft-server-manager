@@ -129,7 +129,7 @@ async function upgradePack(
     // stopped too, or applyPack() below rewrites mod/pack files on disk while
     // the still-live JVM may be concurrently reading/writing the same directory.
     const wasRunning = ['running', 'starting', 'unhealthy', 'stalled'].includes(server.status);
-    if (wasRunning) await serversService.stopServer(serverId, { actor });
+    if (wasRunning) await serversService.stopServer(serverId, { actor, internal: true });
 
     step('applying');
     // The pre-update backup above is the safety net; still require the caller
@@ -205,6 +205,8 @@ async function upgradePack(
       to: resolved.versionName,
       backupId,
     });
+    // The pack is installed and the server is healthy on it.
+    require('../automations/hooks').emit('after-pack-install', serverId, { actor });
     return { ok: true, from: fromName, to: resolved.versionName, backupId };
   } finally {
     activeUpgrades.delete(serverId);
@@ -322,7 +324,7 @@ async function rollbackPack(serverId, { backupId, actor = 'system' } = {}) {
   activeUpgrades.set(serverId, { step: 'rolling-back', startedAt: Date.now() });
   logger.info('Started a pack rollback.', { serverId, actor, toVersion: pack.previous_version_name, backupId });
   try {
-    await serversService.stopServer(serverId, { actor }).catch((err) => {
+    await serversService.stopServer(serverId, { actor, internal: true }).catch((err) => {
       logger.debug('A stop before rollback failed; continuing.', {
         serverId,
         err: serializeError(err, { includeStack: false }),

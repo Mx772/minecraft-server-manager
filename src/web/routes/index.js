@@ -45,6 +45,7 @@ const SERVER_TABS = [
   'console',
   'chat',
   'commands',
+  'automation',
   'players',
   'inventory',
   'analytics',
@@ -74,7 +75,7 @@ const SERVER_TABS = [
 // /integrations redirect below); only the navigation is reorganized.
 const TAB_GROUPS = [
   { key: 'overview', label: 'Overview', icon: 'layout-dashboard', tabs: ['overview'] },
-  { key: 'console', label: 'Console', icon: 'terminal', tabs: ['console', 'chat', 'commands'] },
+  { key: 'console', label: 'Console', icon: 'terminal', tabs: ['console', 'chat', 'commands', 'automation'] },
   { key: 'players', label: 'Players', icon: 'users', tabs: ['players', 'inventory', 'analytics'] },
   { key: 'mods', label: 'Mods', icon: 'puzzle', tabs: ['mods', 'pack-setup', 'configs', 'updates'] },
   { key: 'world', label: 'World', icon: 'earth', tabs: ['worlds', 'map', 'files'] },
@@ -91,6 +92,7 @@ const SUB_LABELS = {
   console: 'Console',
   chat: 'Chat',
   commands: 'Commands',
+  automation: 'Automation',
   players: 'Roster',
   inventory: 'Inventory',
   analytics: 'Stats',
@@ -853,6 +855,11 @@ router.get(
           return { text, level: /\/(ERROR|FATAL)\]/.test(text) ? 'ERROR' : /\/WARN\]/.test(text) ? 'WARN' : 'INFO' };
         });
       context.wsConsole = true;
+    } else if (tab === 'automation') {
+      context.autoRows = automationRows(req, res, row.id);
+      context.editorData = automationEditorData(req, res);
+      // Creating here needs something to do on this server (the page's own rule for naming it).
+      context.canCreateHere = context.editorData.servers.some((s) => s.id === row.id);
     } else if (tab === 'history') {
       context.events = eventsVM(eventsService.listEvents({ serverId: row.id, limit: 100, forUser: req.user }));
     } else if (tab === 'crashes') {
@@ -986,20 +993,146 @@ router.get('/backups', (req, res) => {
   });
 });
 
-router.get('/schedules', (req, res) => {
-  const scheduler = require('../../services/scheduler');
-  res.render('schedules', {
-    title: 'Schedules',
-    active: 'schedules',
-    schedules: scheduler.listSchedules().filter((j) => !j.serverId || res.locals.visibleServerIds.has(j.serverId)),
-    taskTypes: Object.entries(scheduler.TASK_TYPES)
-      .filter(([, t]) => !t.adminOnly || (req.user && req.user.role === 'admin'))
-      .map(([value, t]) => ({
-        value,
-        label: t.label,
-        serverScoped: t.serverScoped,
-      })),
-    serverOptions: (res.locals.servers || []).map((s) => ({ id: s.id, name: s.name })),
+router.get('/schedules', (req, res) => res.redirect('/automations'));
+
+// How each action's settings are edited in the Automation editor.
+const ACTION_FORMS = {
+  message: 'message',
+  command: 'command',
+  discord: 'discord',
+  'copy-files': 'copy',
+  'delete-files': 'delete',
+  backup: 'shrink',
+  'backup-all': 'shrink',
+};
+
+// What each event is called in the editor's menu, and what its steps need to know.
+const EVENT_UI = {
+  'before-start': {
+    label: 'Before The Server Starts',
+    hint: "The server waits for these steps, and doesn't start if one set to stop on failure fails.",
+  },
+  'after-start': { label: 'After The Server Starts', hint: 'Runs once the server is up and ready for players.' },
+  'after-stop': {
+    label: 'After The Server Stops',
+    hint: 'Runs after a stop, but not for restarts, rebuilds, restores, or pack updates.',
+  },
+  'on-crash': { label: 'After The Server Crashes', hint: 'Runs when the panel detects that the server crashed.' },
+  'after-pack-install': { label: 'After A Pack Update', hint: 'Runs after a modpack update has installed.' },
+};
+
+/** "Back up all servers" -> "Back Up All Servers": action names read as Title Case choices. */
+function titleCase(text) {
+  return String(text).replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+/** "3 steps: Send Message, Restart Server", cut short for a table cell. */
+function stepSummary(steps) {
+  const MODES = { overwrite: 'overwrite', 'skip-existing': 'skip existing files', 'only-if-newer': 'only if newer' };
+  const names = steps.map((s) => {
+    const p = s.params || {};
+    // File steps read as what they do, so a list shows which folders they touch.
+    if (s.action === 'copy-files') return `Copy ${p.from} to ${p.to} (${MODES[p.mode] || p.mode})`;
+    if (s.action === 'delete-files') return `Delete ${p.include} in ${p.path}`;
+    return titleCase((automationsApi().ACTIONS[s.action] || { label: s.action }).label);
+  });
+  const text = `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}: ${names.join(', ')}`;
+  return text.length > 120 ? `${text.slice(0, 119)}…` : text;
+}
+
+function automationsApi() {
+  return require('../../automations');
+}
+
+/** "After the server crashes": an event as a phrase for a table cell. */
+function eventPhrase(event) {
+  const { EVENTS } = require('../../automations/events');
+  const when = EVENTS[event] ? EVENTS[event].when : 'when something happens';
+  return when.charAt(0).toUpperCase() + when.slice(1);
+}
+
+/** The automations this user can see as table rows, optionally only those that act on one server. */
+function automationRows(req, res, serverId = '') {
+  const automations = automationsApi();
+  const { canChange, isVisibleTo } = require('../automationAccess');
+  const visible = res.locals.visibleServerIds;
+  return automations
+    .listAutomations()
+    .filter((a) => isVisibleTo(visible, a))
+    .filter(
+      (a) =>
+        !serverId ||
+        a.targets.kind === 'all' ||
+        (a.targets.kind === 'servers' && a.targets.serverIds.includes(serverId))
+    )
+    .map((a) => ({
+      id: a.id,
+      name: a.name,
+      enabled: a.enabled,
+      panel: a.targets.kind === 'panel',
+      runsAll: a.targets.kind === 'all',
+      runsOn: a.targets.kind === 'panel' ? 'Panel' : a.targets.kind === 'all' ? 'All Servers' : a.servers.join(', '),
+      cron: a.cron,
+      trigger: a.trigger.type === 'event' ? eventPhrase(a.trigger.event) : a.cron,
+      isEvent: a.trigger.type === 'event',
+      summary: stepSummary(a.steps),
+      stepCount: `${a.steps.length} ${a.steps.length === 1 ? 'step' : 'steps'}`,
+      next: a.next,
+      nextMs: a.nextMs,
+      lastStatus: a.lastStatus,
+      lastOk: a.lastStatus === 'ok',
+      lastPartial: a.lastStatus === 'partial',
+      lastFailed: a.lastStatus === 'failed',
+      canEdit: canChange(req.user, a),
+      def: { name: a.name, enabled: a.enabled, targets: a.targets, trigger: a.trigger, steps: a.steps },
+    }));
+}
+
+/** What the editor needs: the action catalog, and the servers and kinds of target this user may use. */
+function automationEditorData(req, res) {
+  const role = req.user && req.user.role;
+  const catalog = Object.entries(automationsApi().ACTIONS).map(([key, a]) => ({
+    key,
+    label: titleCase(a.label),
+    scope: a.scope,
+    capability: a.capability || null,
+    adminOnly: Boolean(a.adminOnly),
+    form: ACTION_FORMS[key] || null,
+    events: a.events || [],
+  }));
+  // Servers the user may do something to, with what they may do (per-action choices follow it).
+  const servers = (res.locals.servers || [])
+    .map((s) => ({ id: s.id, name: s.name, caps: permissions.effective(req.user, s.id) }))
+    .filter((s) => s.caps.some((c) => c !== 'view'));
+  const { EVENTS } = require('../../automations/events');
+  const events = Object.entries(EVENTS).map(([key, e]) => ({
+    key,
+    when: e.when,
+    label: (EVENT_UI[key] || { label: key }).label,
+    hint: (EVENT_UI[key] || { hint: '' }).hint,
+  }));
+  return {
+    servers,
+    actions: catalog,
+    events,
+    canAll: role === 'admin',
+    canPanel: role !== 'viewer',
+    isAdmin: role === 'admin',
+  };
+}
+
+router.get('/automations', (req, res) => {
+  const rows = automationRows(req, res);
+  const editorData = automationEditorData(req, res);
+  res.render('automations', {
+    title: 'Automation',
+    active: 'automations',
+    serverRows: rows.filter((r) => !r.panel),
+    panelRows: rows.filter((r) => r.panel),
+    hasRows: rows.length > 0,
+    canCreate: editorData.servers.length > 0 || editorData.canPanel,
+    canTemplates: req.user.role !== 'viewer',
+    editorData,
   });
 });
 

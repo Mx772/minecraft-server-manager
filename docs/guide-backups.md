@@ -83,7 +83,7 @@ is refused until the copy finishes rather than racing it. The archive covers the
 mods, configuration and player data travel with the world.
 
 Backups can run on a schedule alongside restarts and commands, and every new server starts with a
-daily backup schedule. Retention counts each kind separately,
+daily backup automation. Retention counts each kind separately,
 so the ten scheduled copies that pile up on their own cannot push out the one you took by hand before
 a risky change, and age and size caps apply on top. Admins change all of it on the Settings page, or
 per server on its Backups tab. Restoring takes a fresh backup first, so a restore to the wrong point
@@ -93,5 +93,5 @@ that matters most for size.
 The whole panel, including every backup, lives under one directory. Copying that directory elsewhere
 is the off-machine half of the story, and it is deliberately the only thing you have to copy.
 
-Related: [backups in the panel](backups.md), [schedules](schedules.md),
+Related: [backups in the panel](backups.md), [automation](automations.md),
 [shrinking a world](world-shrink.md), [moving a server to another host](guide-moving-a-server.md).

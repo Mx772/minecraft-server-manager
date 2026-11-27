@@ -69,7 +69,7 @@ const defaults = {
 
 const servers = require('../src/services/servers');
 const { dataPath } = require('../src/storage/pathGuard');
-const scheduler = require('../src/services/scheduler');
+const automations = require('../src/automations');
 
 const events = (id, type) => db.all('SELECT * FROM events WHERE server_id = ? AND type = ?', id, type);
 const row = (id) => db.get('SELECT * FROM servers WHERE id = ?', id);
@@ -88,7 +88,8 @@ test.beforeEach(() => {
 });
 
 test.after(() => {
-  for (const r of db.all('SELECT id FROM schedules')) scheduler.deleteSchedule(r.id);
+  for (const r of db.all('SELECT id FROM automations')) automations.deleteAutomation(r.id);
+  automations.stopAll();
 });
 
 test('createServer inserts the row with defaults, makes the dirs, builds the container, and records an event', async () => {
@@ -183,13 +184,16 @@ test('a failed create does not break the next one (serialized chain)', async () 
 
 test('new servers get a staggered daily backup schedule unless autoBackup is off', async () => {
   const s = await servers.createServer({ name: 'Backed', type: 'PAPER' });
-  const sched = db.all('SELECT * FROM schedules WHERE server_id = ?', s.id);
+  const mine = (id) => automations.listAutomations().filter((a) => a.targets.serverIds?.includes(id));
+  const sched = mine(s.id);
   assert.equal(sched.length, 1);
-  assert.equal(sched[0].task_type, 'backup');
+  assert.equal(sched[0].name, 'Daily Backup');
+  assert.deepEqual(sched[0].targets, { kind: 'servers', serverIds: [s.id] });
+  assert.equal(sched[0].steps[0].action, 'backup');
   const [m, h] = sched[0].cron.split(' ').map(Number);
   assert.ok(h >= 2 && h <= 5 && m >= 0 && m < 60, sched[0].cron);
   const off = await create();
-  assert.equal(db.all('SELECT 1 FROM schedules WHERE server_id = ?', off.id).length, 0);
+  assert.equal(mine(off.id).length, 0);
 });
 
 test('create with start:true starts the server after creating it', async () => {
@@ -480,4 +484,212 @@ test('overlapping refreshes are coalesced', async () => {
   await Promise.all([servers.refreshStatuses(), servers.refreshStatuses()]);
   containers.inspectStatus = async () => inspect;
   assert.equal(inspects, total, 'the second call was a no-op while the first was running');
+});
+
+test('automation hooks: before-start runs once before the container starts, and a failing one blocks the start', async (t) => {
+  const hooks = require('../src/automations/hooks');
+  const s = await create();
+  const emitted = [];
+  t.mock.method(hooks, 'emit', async (event, id) => {
+    emitted.push([event, id, calls.includes('startContainer')]);
+  });
+  calls.length = 0;
+  await servers.startServer(s.id);
+  assert.deepEqual(emitted, [['before-start', s.id, false]], 'before the container start call');
+  assert.deepEqual(
+    calls.filter((c) => c === 'startContainer'),
+    ['startContainer']
+  );
+
+  hooks.emit.mock.mockImplementation(async () => {
+    throw Object.assign(new Error('blocked'), { status: 409 });
+  });
+  calls.length = 0;
+  await assert.rejects(() => servers.startServer(s.id), /blocked/);
+  assert.ok(!calls.includes('startContainer'), 'the container was never started');
+});
+
+test('automation hooks: a rebuild of a running server runs before-start exactly once', async (t) => {
+  const hooks = require('../src/automations/hooks');
+  const s = await create();
+  inspect = { exists: true, status: 'running' };
+  const emitted = [];
+  t.mock.method(hooks, 'emit', async (event) => {
+    emitted.push(event);
+  });
+  await servers.recreateServer(s.id);
+  assert.deepEqual(emitted, ['before-start']);
+  emitted.length = 0;
+  inspect = { exists: false };
+  await servers.startServer(s.id); // no container: rebuilt and started
+  assert.deepEqual(emitted, ['before-start']);
+});
+
+test('automation hooks: after-stop fires on a stop, not on the stop inside a restart or a rebuild', async (t) => {
+  const hooks = require('../src/automations/hooks');
+  const s = await create();
+  const emitted = [];
+  t.mock.method(hooks, 'emit', async (event, id) => {
+    emitted.push([event, id]);
+  });
+  await servers.stopServer(s.id);
+  assert.deepEqual(emitted, [['after-stop', s.id]]);
+  emitted.length = 0;
+  await servers.restartServer(s.id);
+  assert.deepEqual(emitted, [['before-start', s.id]]);
+  emitted.length = 0;
+  inspect = { exists: true, status: 'running' };
+  await servers.recreateServer(s.id);
+  assert.ok(!emitted.some(([e]) => e === 'after-stop'));
+});
+
+test('automation hooks: an after-stop backup runs after the stop released its lock, with no busy retry', async (t) => {
+  const backups = require('../src/services/backups');
+  const { guardOp } = require('../src/services/opLock');
+  const s = await create();
+  const automations = require('../src/automations');
+  automations.createAutomation({
+    name: 'Backup after stop',
+    targets: { kind: 'servers', serverIds: [s.id] },
+    trigger: { type: 'event', event: 'after-stop' },
+    steps: [{ offsetSec: 0, action: 'backup', params: {}, onFailure: 'stop' }],
+  });
+  t.mock.method(backups, 'isScheduledBackupRedundant', async () => false);
+  t.mock.method(backups, 'verifyBackup', async () => {});
+  // Honour the real per-server op lock: this throws BUSY while the stop still holds it.
+  const probe = guardOp('backup', async () => {});
+  const create_ = t.mock.method(backups, 'createBackup', async () => {
+    await probe(s.id);
+    return { id: 'bk_after_stop' };
+  });
+  await servers.stopServer(s.id);
+  const t0 = Date.now();
+  while (!create_.mock.callCount() && Date.now() - t0 < 2000) await new Promise((r) => setTimeout(r, 10));
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(create_.mock.callCount(), 1, 'ran once, with no busy retry');
+  const [auto] = automations.listAutomations().filter((a) => a.name === 'Backup after stop');
+  assert.equal(auto.lastStatus, 'ok');
+  assert.equal(automations.listRuns(auto.id)[0].steps[0].status, 'ok');
+  automations.deleteAutomation(auto.id);
+});
+
+test('automation hooks: an internal stop (restore, pack update, port change) does not fire after-stop', async (t) => {
+  const hooks = require('../src/automations/hooks');
+  const s = await create();
+  const emitted = [];
+  t.mock.method(hooks, 'emit', async (event) => {
+    emitted.push(event);
+  });
+  await servers.stopServer(s.id, { internal: true });
+  await servers.stopServerUnguarded(s.id, { internal: true });
+  assert.deepEqual(emitted, []);
+  await servers.stopServerUnguarded(s.id, {});
+  assert.deepEqual(emitted, ['after-stop']);
+});
+
+test('a before-start copy step runs inside the start without a busy retry, and a failing one blocks it', async () => {
+  const s = await create();
+  const dir = require('node:path').join(require('../src/config').dataDir, 'servers', s.id);
+  fs.mkdirSync(require('node:path').join(dir, 'custom'), { recursive: true });
+  fs.writeFileSync(require('node:path').join(dir, 'custom', 'a.txt'), 'A');
+  const automations = require('../src/automations');
+  const mk = (from) =>
+    automations.createAutomation({
+      name: 'Restore',
+      targets: { kind: 'servers', serverIds: [s.id] },
+      trigger: { type: 'event', event: 'before-start' },
+      steps: [{ offsetSec: 0, action: 'copy-files', params: { from, to: 'restored' } }],
+    });
+  const ok = mk('custom');
+  calls.length = 0;
+  await servers.startServer(s.id); // the start holds the server's op lock: the step must not take it
+  assert.equal(fs.readFileSync(require('node:path').join(dir, 'restored', 'a.txt'), 'utf8'), 'A');
+  assert.ok(calls.includes('startContainer'));
+  assert.equal(automations.getAutomation(ok.id).lastStatus, 'ok');
+  automations.deleteAutomation(ok.id);
+
+  mk('missing');
+  calls.length = 0;
+  await assert.rejects(
+    () => servers.startServer(s.id),
+    (e) => e.status === 409 && /did not start|failed before the start/.test(e.message)
+  );
+  assert.ok(!calls.includes('startContainer'));
+});
+
+test('Kill and Stop ask a running file step to stop instead of waiting behind it', async (t) => {
+  const s = await create();
+  const dir = require('node:path').join(require('../src/config').dataDir, 'servers', s.id);
+  fs.mkdirSync(require('node:path').join(dir, 'src'), { recursive: true });
+  for (let i = 0; i < 50; i++) fs.writeFileSync(require('node:path').join(dir, 'src', `f${i}.txt`), 'x');
+  const fileSteps = require('../src/automations/fileSteps');
+  const automations = require('../src/automations');
+  let onStart = () => {};
+  fileSteps.hooks.beforeOp = async () => {
+    onStart();
+    await new Promise((r) => setTimeout(r, 30));
+  };
+  t.after(() => (fileSteps.hooks.beforeOp = null));
+  const a = automations.createAutomation({
+    name: 'Long copy',
+    enabled: false,
+    targets: { kind: 'servers', serverIds: [s.id] },
+    trigger: { type: 'schedule', cron: '0 4 * * *' },
+    steps: [{ offsetSec: 0, action: 'copy-files', params: { from: 'src', to: 'out' } }],
+  });
+  for (const [verb, call] of [
+    ['kill', () => servers.killServer(s.id, { actor: 'tester' })],
+    ['stop', () => servers.stopServer(s.id, { actor: 'tester' })],
+  ]) {
+    const running = new Promise((r) => (onStart = r));
+    const run = automations.runNow(a.id);
+    await running;
+    await call(); // would be a 409 "already in progress" without the hand-off
+    await run.done;
+    const last = automations.listRuns(a.id)[0];
+    assert.equal(last.steps[0].status, 'failed', verb);
+    assert.match(last.steps[0].detail, /stopped before it finished, because the server is being stopped/);
+    const outDir = require('node:path').join(dir, 'out');
+    assert.ok(!fs.existsSync(outDir) || fs.readdirSync(outDir).length < 50, 'it did not run to the end');
+    fs.rmSync(require('node:path').join(dir, 'out'), { recursive: true, force: true });
+  }
+  automations.deleteAutomation(a.id);
+});
+
+test("only a person's Stop or Kill cancels a file step; internal callers still get a busy answer", async (t) => {
+  const s = await create();
+  const dir = require('node:path').join(require('../src/config').dataDir, 'servers', s.id);
+  fs.mkdirSync(require('node:path').join(dir, 'src'), { recursive: true });
+  for (let i = 0; i < 5; i++) fs.writeFileSync(require('node:path').join(dir, 'src', `f${i}.txt`), 'x');
+  const fileSteps = require('../src/automations/fileSteps');
+  const automations = require('../src/automations');
+  let onStart = () => {};
+  let release;
+  const held = new Promise((r) => (release = r));
+  fileSteps.hooks.beforeOp = async () => {
+    onStart();
+    await held;
+  };
+  t.after(() => (fileSteps.hooks.beforeOp = null));
+  const a = automations.createAutomation({
+    name: 'Held copy',
+    enabled: false,
+    targets: { kind: 'servers', serverIds: [s.id] },
+    trigger: { type: 'schedule', cron: '0 4 * * *' },
+    steps: [{ offsetSec: 0, action: 'copy-files', params: { from: 'src', to: 'out' } }],
+  });
+  const running = new Promise((r) => (onStart = r));
+  const run = automations.runNow(a.id);
+  await running;
+  for (const actor of ['automation', 'scheduler', 'system', 'watcher', undefined, 'wizard:Steve']) {
+    await assert.rejects(
+      () => servers.stopServer(s.id, actor === undefined ? {} : { actor }),
+      (e) => e.code === 'BUSY',
+      String(actor)
+    );
+  }
+  release();
+  await run.done;
+  assert.equal(automations.listRuns(a.id)[0].status, 'ok', 'the step was left to finish');
+  automations.deleteAutomation(a.id);
 });

@@ -10,7 +10,7 @@
 //   - a hidden server: 404 on pages, API, WebSocket, and absent from every
 //     fleet-wide page and endpoint
 //   - the Permissions page + API (admin-only, validation, reset)
-//   - schedules, backups-by-id, world targets, events
+//   - automations, backups-by-id, world targets, events
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -32,6 +32,16 @@ async function login(username, password, role) {
   const r = await app.req('POST', '/login', { body: { username, password } });
   return { id: user.id, cookie: (r.setCookie || []).map((c) => c.split(';')[0]).join('; ') };
 }
+
+/** A definition for POST /api/automations. */
+const auto = (targets, action = 'restart', over = {}) => ({
+  name: 'Test automation',
+  targets,
+  trigger: { type: 'schedule', cron: '0 4 * * *' },
+  steps: [{ offsetSec: 0, action }],
+  ...over,
+});
+const onServers = (...serverIds) => ({ kind: 'servers', serverIds });
 
 const NOT_GATED = (status) => ![401, 403, 404].includes(status);
 
@@ -65,9 +75,9 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  // Schedules created below arm Cron timers that would keep the process alive.
-  const scheduler = require('../src/services/scheduler');
-  for (const row of db.all('SELECT id FROM schedules')) scheduler.deleteSchedule(row.id, { actor: 'test' });
+  // Automations created below arm Cron timers that would keep the process alive.
+  const automations = require('../src/automations');
+  for (const row of db.all('SELECT id FROM automations')) automations.deleteAutomation(row.id, { actor: 'test' });
   await app.stop();
 });
 
@@ -151,35 +161,40 @@ test('viewer with power+console on B: allowed on B, still refused on A and panel
   assert.equal((await app.req('POST', '/api/servers', { cookie: viewerCookie, body: { name: 'x' } })).status, 403);
   assert.equal((await app.req('POST', '/api/storage/scan', { cookie: viewerCookie })).status, 403);
   assert.equal((await app.req('POST', '/api/users', { cookie: viewerCookie, body: {} })).status, 403);
-  // Server-scoped schedules follow the capability on that server, even for a viewer.
-  const restartB = await app.req('POST', '/api/schedules', {
+  // Server-scoped automations follow the capability on that server, even for a viewer.
+  const restartB = await app.req('POST', '/api/automations', {
     cookie: viewerCookie,
-    body: { serverId: B, taskType: 'restart', cron: '0 4 * * *' },
+    body: auto(onServers(B)),
   });
-  assert.equal(restartB.status, 201, 'power on B allows a restart schedule on B');
-  const backupB = await app.req('POST', '/api/schedules', {
+  assert.equal(restartB.status, 201, 'power on B allows a restart automation on B');
+  const backupB = await app.req('POST', '/api/automations', {
     cookie: viewerCookie,
-    body: { serverId: B, taskType: 'backup', cron: '0 4 * * *' },
+    body: auto(onServers(B), 'backup'),
   });
   assert.equal(backupB.status, 403, 'no backups on B');
   assert.match(backupB.json.error, /backups permission/);
-  const restartA = await app.req('POST', '/api/schedules', {
+  const restartA = await app.req('POST', '/api/automations', {
     cookie: viewerCookie,
-    body: { serverId: A, taskType: 'restart', cron: '0 4 * * *' },
+    body: auto(onServers(A)),
   });
   assert.equal(restartA.status, 403, 'read-only on A');
-  const globalJob = await app.req('POST', '/api/schedules', {
+  const bothServers = await app.req('POST', '/api/automations', {
     cookie: viewerCookie,
-    body: { taskType: 'tmp-clean', cron: '0 5 * * *' },
+    body: auto(onServers(A, B)),
   });
-  assert.equal(globalJob.status, 403, 'panel-global schedules stay on the global role');
-  const toggleB = await app.req('POST', `/api/schedules/${restartB.json.schedule.id}/toggle`, {
+  assert.equal(bothServers.status, 403, 'one read-only server in the list refuses the whole automation');
+  const globalJob = await app.req('POST', '/api/automations', {
+    cookie: viewerCookie,
+    body: auto({ kind: 'panel' }, 'tmp-clean'),
+  });
+  assert.equal(globalJob.status, 403, 'panel-global automations stay on the global role');
+  const toggleB = await app.req('POST', `/api/automations/${restartB.json.automation.id}/toggle`, {
     cookie: viewerCookie,
     body: { enabled: false },
   });
   assert.equal(toggleB.status, 200);
   assert.equal(
-    (await app.req('DELETE', `/api/schedules/${restartB.json.schedule.id}`, { cookie: viewerCookie })).status,
+    (await app.req('DELETE', `/api/automations/${restartB.json.automation.id}`, { cookie: viewerCookie })).status,
     200
   );
 });
@@ -219,7 +234,7 @@ test('server page reflects the grant: power buttons shown on B, hidden on A; fil
 // ---------------------------------------------------------------------------
 // Demotion.
 
-test('operator demoted to view on A: refused on A, untouched on B, schedules follow', async () => {
+test('operator demoted to view on A: refused on A, untouched on B, automations follow', async () => {
   const set = await app.req('PUT', `/api/permissions/${operatorId}/${A}`, {
     cookie: adminCookie,
     body: { perms: ['view'] },
@@ -237,40 +252,45 @@ test('operator demoted to view on A: refused on A, untouched on B, schedules fol
     200
   );
 
-  // A restart schedule on A needs power there; on B it is fine.
-  const schedA = await app.req('POST', '/api/schedules', {
+  // A restart automation on A needs power there; on B it is fine.
+  const schedA = await app.req('POST', '/api/automations', {
     cookie: operatorCookie,
-    body: { serverId: A, taskType: 'restart', cron: '0 4 * * *' },
+    body: auto(onServers(A)),
   });
   assert.equal(schedA.status, 403);
   assert.match(schedA.json.error, /power permission/);
-  const schedB = await app.req('POST', '/api/schedules', {
+  const schedB = await app.req('POST', '/api/automations', {
     cookie: operatorCookie,
-    body: { serverId: B, taskType: 'restart', cron: '0 4 * * *' },
+    body: auto(onServers(B)),
   });
   assert.equal(schedB.status, 201);
-  const global = await app.req('POST', '/api/schedules', {
+  const schedBoth = await app.req('POST', '/api/automations', {
     cookie: operatorCookie,
-    body: { taskType: 'tmp-clean', cron: '0 5 * * *' },
+    body: auto(onServers(A, B)),
   });
-  assert.equal(global.status, 201, 'panel-global schedules follow the global role');
-  // Toggling an A-scoped schedule created by the admin is refused too.
-  const adminSched = await app.req('POST', '/api/schedules', {
+  assert.equal(schedBoth.status, 403, 'the demoted server in the list refuses the whole automation');
+  const global = await app.req('POST', '/api/automations', {
+    cookie: operatorCookie,
+    body: auto({ kind: 'panel' }, 'tmp-clean'),
+  });
+  assert.equal(global.status, 201, 'panel-global automations follow the global role');
+  // Toggling an A-scoped automation created by the admin is refused too.
+  const adminSched = await app.req('POST', '/api/automations', {
     cookie: adminCookie,
-    body: { serverId: A, taskType: 'backup', cron: '0 3 * * *' },
+    body: auto(onServers(A), 'backup'),
   });
   assert.equal(adminSched.status, 201);
-  const toggle = await app.req('POST', `/api/schedules/${adminSched.json.schedule.id}/toggle`, {
+  const toggle = await app.req('POST', `/api/automations/${adminSched.json.automation.id}/toggle`, {
     cookie: operatorCookie,
     body: { enabled: false },
   });
   assert.equal(toggle.status, 403);
   assert.equal(
-    (await app.req('DELETE', `/api/schedules/${adminSched.json.schedule.id}`, { cookie: operatorCookie })).status,
+    (await app.req('DELETE', `/api/automations/${adminSched.json.automation.id}`, { cookie: operatorCookie })).status,
     403
   );
   assert.equal(
-    (await app.req('DELETE', `/api/schedules/${adminSched.json.schedule.id}`, { cookie: adminCookie })).status,
+    (await app.req('DELETE', `/api/automations/${adminSched.json.automation.id}`, { cookie: adminCookie })).status,
     200
   );
 });
@@ -304,7 +324,7 @@ test('hidden server: 404 on pages and API, refused actions read as not found', a
   assert.equal((await app.req('GET', `/api/servers/${B}/logs`, { cookie: viewerCookie })).status, 200);
 });
 
-test('hidden server: absent from sidebar, dashboard, live, summary, backups, schedules, activity, updates', async () => {
+test('hidden server: absent from sidebar, dashboard, live, summary, backups, automations, activity, updates', async () => {
   db.run(
     `INSERT INTO backups (id, server_id, filename, rel_path, size_bytes, reason) VALUES ('bk_hidden_a', ?, 'a.zip', 'backups/a.zip', 10, 'manual')`,
     A
@@ -317,7 +337,7 @@ test('hidden server: absent from sidebar, dashboard, live, summary, backups, sch
   recordEvent({ serverId: B, actor: 'test', type: 'crash-report', summary: 'Bravo public event.' });
   recordEvent({ actor: 'test', type: 'login', summary: 'Global event line.' });
 
-  for (const path of ['/', '/servers', '/backups', '/schedules', '/activity', '/updates', '/modpacks', '/worlds']) {
+  for (const path of ['/', '/servers', '/backups', '/automations', '/activity', '/updates', '/modpacks', '/worlds']) {
     const page = await app.req('GET', path, { cookie: viewerCookie, headers: { Accept: 'text/html' } });
     assert.equal(page.status, 200, path);
     assert.ok(!page.text.includes(`/servers/${A}`), `${path} must not link the hidden server`);
@@ -789,22 +809,42 @@ test('blueprints addressed by id (preview, import, delete) are not found when th
   assert.ok(!opActivity.text.includes('Blueprint deleted: Alpha Server'));
 });
 
-test('panel-global schedule types follow the global role even with a serverId attached', async () => {
+test('panel-global automation actions follow the global role even with a server grant', async () => {
   await app.req('PUT', `/api/permissions/${viewerId}/${B}`, { cookie: adminCookie, body: { perms: ['settings'] } });
-  for (const taskType of ['storage-scan', 'update-check', 'tmp-clean']) {
-    const r = await app.req('POST', '/api/schedules', {
+  for (const action of ['storage-scan', 'update-check', 'tmp-clean']) {
+    const r = await app.req('POST', '/api/automations', {
       cookie: viewerCookie,
-      body: { serverId: B, taskType, cron: '0 5 * * *' },
+      body: auto({ kind: 'panel' }, action),
     });
-    assert.equal(r.status, 403, `${taskType} with a serverId is still panel-global`);
+    assert.equal(r.status, 403, `${action} is still panel-global for a viewer`);
+    // Naming a server does not turn a panel action into a server one.
+    const named = await app.req('POST', '/api/automations', {
+      cookie: viewerCookie,
+      body: auto(onServers(B), action),
+    });
+    assert.equal(named.status, 400, `${action} cannot run for specific servers`);
   }
-  // An operator may create them; the serverId is dropped because the task is not server-scoped.
-  const r = await app.req('POST', '/api/schedules', {
+  // An operator may create them.
+  const r = await app.req('POST', '/api/automations', {
     cookie: operatorCookie,
-    body: { serverId: B, taskType: 'tmp-clean', cron: '0 5 * * *' },
+    body: auto({ kind: 'panel' }, 'tmp-clean'),
   });
   assert.equal(r.status, 201);
-  assert.equal(r.json.schedule.serverId, null);
+  assert.deepEqual(r.json.automation.targets, { kind: 'panel' });
+  // Fleet actions and every-server automations outrun any per-server grant.
+  assert.equal(
+    (
+      await app.req('POST', '/api/automations', {
+        cookie: operatorCookie,
+        body: auto({ kind: 'panel' }, 'restart-all'),
+      })
+    ).status,
+    403
+  );
+  assert.equal(
+    (await app.req('POST', '/api/automations', { cookie: operatorCookie, body: auto({ kind: 'all' }) })).status,
+    403
+  );
   await app.req('PUT', `/api/permissions/${viewerId}/${B}`, { cookie: adminCookie, body: { perms: null } });
 });
 
@@ -878,27 +918,27 @@ test('the viewer gate decodes the path id and tolerates a trailing slash', async
     body: { label: 'enc' },
   });
   assert.equal(r.status, 200, 'percent-encoded id resolves to the same server');
-  const slash = await app.req('POST', '/api/schedules/', {
+  const slash = await app.req('POST', '/api/automations/', {
     cookie: viewerCookie,
-    body: { serverId: B, taskType: 'restart', cron: '0 6 * * *' },
+    body: auto(onServers(B)),
   });
   assert.equal(slash.status, 201);
-  await app.req('DELETE', `/api/schedules/${slash.json.schedule.id}`, { cookie: viewerCookie });
+  await app.req('DELETE', `/api/automations/${slash.json.automation.id}`, { cookie: viewerCookie });
   const bad = await app.req('POST', '/api/servers/%E0%A4%A/start', { cookie: viewerCookie });
   assert.equal(bad.status, 403, 'a malformed escape fails closed');
   await app.req('PUT', `/api/permissions/${viewerId}/${B}`, { cookie: adminCookie, body: { perms: null } });
 });
 
-test('schedules: task type is an enum; server-scoped capability comes from the task table', async () => {
-  const unknown = await app.req('POST', '/api/schedules', {
+test('automations: the action must exist; server-scoped capability comes from the action catalog', async () => {
+  const unknown = await app.req('POST', '/api/automations', {
     cookie: adminCookie,
-    body: { serverId: B, taskType: 'format-disk', cron: '0 6 * * *' },
+    body: auto(onServers(B), 'format-disk'),
   });
   assert.equal(unknown.status, 400);
-  const { TASK_TYPES } = require('../src/services/scheduler');
-  for (const [type, meta] of Object.entries(TASK_TYPES)) {
-    if (meta.serverScoped) assert.ok(meta.capability, `${type} names its capability`);
-    else assert.equal(meta.capability, undefined, `${type} is panel-global`);
+  const { ACTIONS } = require('../src/automations');
+  for (const [key, meta] of Object.entries(ACTIONS)) {
+    if (meta.scope === 'server') assert.ok(meta.capability, `${key} names its capability`);
+    else assert.equal(meta.capability, undefined, `${key} is panel-global`);
   }
 });
 

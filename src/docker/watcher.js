@@ -135,6 +135,12 @@ async function handleEvent(evt) {
   }
   if (eventStatus === 'health_status: healthy') {
     db.run("UPDATE servers SET status = 'running' WHERE id = ?", serverId);
+    // `server` was read before the update: only a boot finishing counts as the
+    // server starting. Coming back from 'unhealthy' is a recovery, and a repeat
+    // healthy event on a running server is nothing new.
+    if (server.status === 'starting' || server.status === 'stalled') {
+      require('../automations/hooks').emit('after-start', serverId);
+    }
     // Files a pack profile could not patch before the first boot may exist now. Fire and forget.
     require('../services/packProfiles')
       .onHealthy(serverId)
@@ -247,6 +253,7 @@ async function handleEvent(evt) {
     },
     logExcerpt: excerpt || null,
   });
+  require('../automations/hooks').emit('on-crash', serverId); // once per crash; a crash-loop is a separate event
   if (!armedRestart) return; // config error / stop window / SIGKILL / no auto_restart
 
   armRestart(serverId);

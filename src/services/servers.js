@@ -465,8 +465,14 @@ async function createServerImpl(input, { actor = 'system', start = false, onProg
     try {
       const h = 2 + Math.floor(Math.random() * 4);
       const m = Math.floor(Math.random() * 60);
-      require('./scheduler').createSchedule(
-        { serverId: id, taskType: 'backup', cron: `${m} ${h} * * *`, enabled: true },
+      require('../automations').createAutomation(
+        {
+          name: 'Daily Backup',
+          enabled: true,
+          targets: { kind: 'servers', serverIds: [id] },
+          trigger: { type: 'schedule', cron: `${m} ${h} * * *` },
+          steps: [{ offsetSec: 0, action: 'backup', params: {}, onFailure: 'stop' }],
+        },
         { actor }
       );
     } catch (err) {
@@ -538,6 +544,10 @@ async function startServerImpl(id, { actor = 'system', rebuilt = false } = {}) {
     const { started } = await recreateServerImpl(id, { actor, quiet: true });
     if (started) return;
   }
+  // Every start that boots a container passes here exactly once (a rebuild of a
+  // running server comes back through this function with `rebuilt`). A failing
+  // before-start automation throws and the container is never started.
+  await require('../automations/hooks').emit('before-start', id, { actor });
   await applyProfileBeforeStart(id, actor);
   await containers.startContainer(id);
   markStarted(id, actor);
@@ -562,7 +572,13 @@ function markStarted(id, actor) {
   logger.info('Started a server.', { serverId: id, actor });
 }
 
-async function stopServerImpl(id, { actor = 'system' } = {}) {
+/**
+ * @param {string} id
+ * @param {{ actor?: string, internal?: boolean }} [opts] internal: this stop is part of a
+ *   bigger operation (a restart, restore, pack update, port change, or world shrink), not
+ *   something a person or an automation asked for, so no after-stop automations run.
+ */
+async function stopServerImpl(id, { actor = 'system', internal = false } = {}) {
   mustGet(id);
   recordEvent({ serverId: id, actor, type: 'stop-requested', summary: 'Graceful stop requested.' });
   // A graceful stop triggers the game's own shutdown-time world save (rcon
@@ -593,17 +609,54 @@ async function stopServerImpl(id, { actor = 'system' } = {}) {
     logExcerpt: excerpt || null,
   });
   logger.info('Stopped a server.', { serverId: id, actor });
+  // Only a stop the panel carried out gets here: a clean exit the panel did not
+  // ask for (an in-game /stop) is seen by the watcher, which does not fire it.
+  if (!internal) require('../automations/hooks').emit('after-stop', id, { actor });
 }
 
 async function restartServerImpl(id, { actor = 'system' } = {}) {
   recordEvent({ serverId: id, actor, type: 'restart-requested', summary: 'Restart requested.' });
-  await stopServerImpl(id, { actor });
+  await stopServerImpl(id, { actor, internal: true });
   await startServerImpl(id, { actor });
   recordEvent({ serverId: id, actor, type: 'restarted', summary: 'Server restarted.' });
 }
 
 const startServer = guardOp('start', startServerImpl);
-const stopServer = guardOp('stop', stopServerImpl);
+const INTERNAL_ACTORS = new Set(['system', 'automation', 'scheduler', 'watcher', 'setup']);
+/** A panel user (a username), not the panel acting for itself or an in-game player (`wizard:x`, `chat:x`). */
+const isPerson = (actor) =>
+  typeof actor === 'string' && actor !== '' && !INTERNAL_ACTORS.has(actor) && !actor.includes(':');
+
+/**
+ * Stop and Kill must not sit behind a long file step: when the server is busy only
+ * because an automation is copying or deleting files, ask it to finish early, then
+ * try again.
+ * @template {(...args: any[]) => Promise<any>} F
+ * @param {F} guarded
+ * @returns {F}
+ */
+function yieldingToFileSteps(guarded) {
+  return /** @type {F} */ (
+    async (...args) => {
+      try {
+        return await guarded(...args);
+      } catch (err) {
+        if (!err || err.code !== 'BUSY') throw err;
+        // Only a person's Stop or Kill takes priority. An automation's own Stop step,
+        // the watcher, and other internal callers wait or fail as they always did.
+        if (!isPerson(args[1] && args[1].actor)) throw err;
+        const stopped = await require('../automations/fileSteps').cancelFileStep(
+          args[0],
+          'the server is being stopped'
+        );
+        if (!stopped) throw err;
+        return guarded(...args);
+      }
+    }
+  );
+}
+
+const stopServer = yieldingToFileSteps(guardOp('stop', stopServerImpl));
 const restartServer = guardOp('restart', restartServerImpl);
 
 async function killServerImpl(id, { actor = 'system' } = {}) {
@@ -614,7 +667,7 @@ async function killServerImpl(id, { actor = 'system' } = {}) {
   recordEvent({ serverId: id, actor, type: 'killed', summary: 'Server force-stopped. The world may not have saved.' });
 }
 
-const killServer = guardOp('kill', killServerImpl);
+const killServer = yieldingToFileSteps(guardOp('kill', killServerImpl));
 
 /** Recreate: remove + create with current env/resources. Applies pending changes. */
 async function recreateServerImpl(id, { actor = 'system', quiet = false } = {}) {
@@ -1013,7 +1066,7 @@ async function changeGamePortImpl(id, port, { actor = 'system', isAdmin = false,
 
     if (running) {
       try {
-        await stopServerImpl(id, { actor });
+        await stopServerImpl(id, { actor, internal: true });
       } catch (err) {
         // Still running on its old port, and nothing was written: nothing to undo.
         recordEvent({
@@ -1176,19 +1229,9 @@ async function deleteServerImpl(
   // Full cleanup cascade - without it schedules keep firing, backups pile up,
   // and server_content rows block library deletions forever.
 
-  // Schedules: disarm the live cron jobs, not just the rows.
-  const scheduler = require('./scheduler'); // lazy - avoids a require cycle
-  for (const sched of db.all('SELECT id FROM schedules WHERE server_id = ?', id)) {
-    try {
-      scheduler.deleteSchedule(sched.id, { actor });
-    } catch (err) {
-      logger.error('Could not delete a schedule while deleting its server.', {
-        serverId: id,
-        scheduleId: sched.id,
-        err: serializeError(err),
-      });
-    }
-  }
+  // Automations: drop the server from their targets (an automation left with
+  // no servers is deleted), so nothing keeps firing at a server that is gone.
+  require('../automations').removeServerFromTargets(id, { actor });
 
   // Backups: DB rows + the files directory (optional - keep them for reuse).
   if (!keepBackups) {

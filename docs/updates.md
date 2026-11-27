@@ -17,7 +17,7 @@ The **Updates** page tracks what's out of date across your fleet in one place:
 
 The panel checks each server's pinned versions against the upstream source and lists anything with a newer release. A matching count also appears on the [dashboard](dashboard.md)'s "Updates available" tile.
 
-Checks run daily on a default [schedule](schedules.md) and on demand with **Check All Now**. **Ignore** on a row stops offering that particular version; a newer one is offered again. Update **policy** is per-server: the panel leaves everything manual (the default, which also keeps the server off this page), just notifies you, or applies pack updates itself ([update policy](modpacks.md#update-policy)).
+Checks run daily on a default [automation](automations.md) and on demand with **Check All Now**. **Ignore** on a row stops offering that particular version; a newer one is offered again. Update **policy** is per-server: the panel leaves everything manual (the default, which also keeps the server off this page), just notifies you, or applies pack updates itself ([update policy](modpacks.md#update-policy)).
 
 ## Minecraft version compatibility
 

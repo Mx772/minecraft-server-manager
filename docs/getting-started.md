@@ -32,7 +32,7 @@ Everything hangs off the left sidebar:
 
 - **Dashboard**: every server at a glance ([details](dashboard.md)).
 - **Servers**, **Modpacks**, **Worlds**, **Blueprints**: create and manage servers and their content.
-- **Updates**, **Backups**, **Schedules**, **Storage**, **Activity**: the operational side: what's out of date, your snapshots, automation, disk usage, and the audit log.
+- **Updates**, **Backups**, **Automation**, **Storage**, **Activity**: the operational side: what's out of date, your snapshots, automation, disk usage, and the audit log.
 - **Permissions** (bottom, admins only): what each user may do on each server ([details](users-and-roles.md#per-server-permissions)).
 - **Settings** (bottom, admins only): API keys, panel configuration, defaults for new servers, [backup retention](backups.md#retention), users, sign-in security, and the public API.
 

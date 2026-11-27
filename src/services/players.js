@@ -697,7 +697,7 @@ const SWEEP_RUNNING_STATES = new Set(['running', 'unhealthy']); // rcon still an
  * already ignores an expired ban on connect, but leaves the stale entry
  * sitting in the file forever and the panel would otherwise keep reporting
  * it as banned - this cleans up the entry (and logs the event) instead.
- * Wired to a global schedule; see services/scheduler.js.
+ * Wired to a global schedule; see automations/actions.js.
  */
 async function sweepExpiredBans() {
   const { listServers } = require('./servers');

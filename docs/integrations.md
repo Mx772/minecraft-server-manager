@@ -41,7 +41,8 @@ Notifications are grouped into toggleable categories. All are on by default.
 | `unhealthy`             | The process is up but the `mc-health` probe is failing: a live but dead server.                                |
 | `startup-stalled`       | Still starting after ~10 min with no "Done" in the logs (with a diagnosis of what to fix, where one is known). |
 | `stop-failed`           | A graceful stop didn't take effect and the container is still running.                                         |
-| `schedule-failed`       | A scheduled restart / backup / command failed.                                                                 |
+| `schedule-failed`       | A scheduled restart / backup / command failed (older Schedules runs).                                          |
+| `automation-failed`     | A step of an automation failed.                                                                                |
 | `quota-exceeded`        | Strict-mode disk quota tripped and the server was stopped.                                                     |
 | `offline-after-restart` | The server was up before the panel restarted, isn't now, and won't be auto-started.                            |
 | `port-change-failed`    | A port change failed and the server could not be put back on its old port, so it is down.                      |
